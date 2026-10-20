@@ -1,0 +1,7 @@
+build/
+node_modules/
+tools/effects-preview/out/
+tools/effects-preview/.scenes-tmp/
+tools/effects-preview/.test-*/
+*.pyc
+__pycache__/

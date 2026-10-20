@@ -1,0 +1,8 @@
+{
+  "name": "lumora-effects-preview",
+  "private": true,
+  "type": "module",
+  "description": "Render Lumora's crossing animations to PNG without GNOME",
+  "scripts": { "preview": "node render.mjs", "scenes": "node render-scenes.mjs", "test": "node test-extensions.mjs" },
+  "dependencies": { "@napi-rs/canvas": "0.1.53" }
+}
