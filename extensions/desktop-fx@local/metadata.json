@@ -3,5 +3,5 @@
   "name": "Lumora Desktop FX",
   "description": "Cursor trail, click ripples, window slam and monitor-crossing effects, battery fire and a typing combo counter.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 3
+  "version": 5
 }

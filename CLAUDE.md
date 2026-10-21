@@ -1,6 +1,6 @@
 # Lumora
 
-Screen animations for GNOME on Ubuntu (Wayland). Four parts:
+Screen animations for GNOME on Ubuntu (Wayland). Five parts:
 
 1. **Edge Portal** (`extensions/edge-portal@local/`): GNOME Shell extension.
    Plays an animation when the mouse crosses between monitors (subtle *exit*
@@ -18,16 +18,34 @@ Screen animations for GNOME on Ubuntu (Wayland). Four parts:
    Cursor trail (comet / rainbow / sparkles / stars), click ripples (ripple /
    shockwave / sparks / confetti), window slam (dust + shockwave when a
    dragged window snaps or maximises), window crossing (light gate + glowing
-   outline when a dragged window changes monitor), battery fire (flames along
-   the bottom of the primary monitor below `batteryLevel`% while discharging,
-   via UPower's DisplayDevice on the system bus), typing combo counter.
-4. **Lumora app** (`app/lumora.py`): GTK4 + libadwaita (Python/PyGObject)
+   outline when a dragged window changes monitor), battery (a blinking
+   nearly-empty battery + red edge pulse at the bottom of the primary monitor
+   below `batteryLevel`% while discharging, and the same strip + battery in
+   green (fills to full, bottom edge glows green) when charging reaches
+   `batteryFullLevel`; UPower's DisplayDevice on the system
+   bus), clipboard (copy, files cut), typing combo counter. The low battery
+   setting keys are still `batteryFire` / `batteryKeepBurning` (it used to be
+   flames); keep the names so saved settings keep working.
+4. **System FX** (`extensions/system-fx@local/`): GNOME Shell extension.
+   Wi-Fi / Bluetooth / VPN connect + disconnect, Wi-Fi switching network (or
+   access point), volume up / down / 100% / 0% / mute / unmute, mic mute /
+   unmute, screen lock / unlock. Status animations play at the top middle
+   of the primary monitor, just under the top bar (one at a time: a new one replaces the one showing), with
+   the network/device name under them (never while locked); lock/unlock in
+   the middle of the primary monitor. Sources: NetworkManager (`gi://NM`,
+   dynamic import), GnomeBluetooth 3.0 (dynamic import), GNOME's own mixer
+   (`getMixerControl()` from ui/status/volume.js; shared, never close it),
+   `Main.screenShield` `locked-changed`. Its metadata has
+   `"session-modes": ["user", "unlock-dialog"]` so it keeps running on the
+   lock screen; the other extensions are disabled there by GNOME as usual.
+5. **Lumora app** (`app/lumora.py`): GTK4 + libadwaita (Python/PyGObject)
    settings window for all three extensions. Tabs are a scrollable sidebar
    (`Adw.NavigationSplitView`, collapses below ~560sp), not a header-bar
    switcher, so many tabs fit. Add a tab with `self._add_tab(...)` in
-   `Window.__init__`. Tabs: Edge Portal, Terminal FX, and Cursor / Windows /
-   Desktop (all three are Desktop FX, but each tab has its OWN on/off switch
-   and flag file, so they work independently; the user asked for that).
+   `Window.__init__`. Tabs: Edge Portal, Terminal FX, Cursor / Windows /
+   Desktop (Desktop FX) and Connections / Sound / Lock screen (System FX).
+   Each of those tabs has its OWN on/off switch and flag file, so they work
+   independently; the user asked for that.
 
 Plus `shell/fx.sh`, the `fx` bash function users put in front of commands.
 It also has an optional "every command" hook (bash only: DEBUG trap +
@@ -44,7 +62,8 @@ any existing PROMPT_COMMAND (string or array). The extension doesn't read
 app/lumora.py, app/lumora.svg          settings app + icon
 extensions/edge-portal@local/          extension.js, effects.js, metadata.json
 extensions/term-fx@local/              extension.js, scenes.js (git + fireworks), metadata.json
-extensions/desktop-fx@local/           extension.js, scenes.js (ripples, slam, gate, flames), metadata.json
+extensions/desktop-fx@local/           extension.js, scenes.js (ripples, slam, gate, battery, clipboard), metadata.json
+extensions/system-fx@local/            extension.js, scenes.js (connections, sound, lock), metadata.json
 extensions/shared/config.js            SINGLE SOURCE: LiveConfig + localhost listener
 extensions/shared/draw.js              SINGLE SOURCE: Cairo helpers (glow, puff, glowStroke, explosion...)
 extensions/shared/unredirect.js        SINGLE SOURCE: keeps overlays visible over full-screen-covering apps
@@ -63,7 +82,7 @@ Edit the source here and run `./install.sh`.
 - **Settings:** the app writes `~/.config/lumora/config.json` (atomic replace).
   All extensions watch that directory (`LiveConfig` in `shared/config.js`) and
   reload instantly, so settings changes never need a logout.
-  Sections: `"edge"`, `"terminal"`, `"desktop"`. Defaults are duplicated and
+  Sections: `"edge"`, `"terminal"`, `"desktop"`, `"system"`. Defaults are duplicated and
   must stay in sync: `DEFAULTS` in `app/lumora.py`, and `DEFAULTS` in each
   `extension.js`. A new setting needs adding in all relevant places.
   `LiveConfig` only accepts keys that exist in the extension's DEFAULTS, with
@@ -71,7 +90,8 @@ Edit the source here and run `./install.sh`.
 - **On/off switches:** files in `$XDG_RUNTIME_DIR`: `edge-portal-on`,
   `term-fx-on`, and for Desktop FX one per tab: `desktop-fx-cursor-on`
   (trail, ripples), `desktop-fx-windows-on` (slam, crossing),
-  `desktop-fx-desktop-on` (battery fire, combo).
+  `desktop-fx-desktop-on` (battery, clipboard, combo), and for System FX:
+  `system-fx-connections-on`, `system-fx-sound-on`, `system-fx-lock-on`.
   `/run/user/<id>` is wiped at reboot, so effects are always OFF after a
   restart. This is a deliberate safety feature the user asked for. Do not
   make the extensions run without the flag. Desktop FX only watches input
@@ -85,7 +105,10 @@ Edit the source here and run `./install.sh`.
     previews git scenes as `preview-success 0 d=0 git push`).
   - 47322: Edge Portal previews from the app: `preview <effect-name>`.
   - 47323: Desktop FX previews from the app: `trail <style>`,
-    `ripple <style>`, `slam`, `cross`, `fire`, `combo`.
+    `ripple <style>`, `slam`, `cross`, `lowbattery`, `charged`, `copy`,
+    `cut`, `combo`.
+  - 47324: System FX previews: `preview <name>` (names = keys of `SCENES`
+    in its scenes.js, e.g. `wifi-switch`, `vol-max`, `unlock`).
   Over SSH (Termius), users forward remote port 47321 to the laptop.
 - **"Needs logout" detection:** on enable, each extension writes its
   `metadata.version` to `$XDG_RUNTIME_DIR/lumora/<uuid>.running`. The app
@@ -129,6 +152,20 @@ Edit the source here and run `./install.sh`.
   release each count, so keys = events / 2). Clicks = a new bit in the button
   mask, checked from both the idle watch and the 16ms pointer ticker. The
   combo never sees which key, and is off while the screen is locked.
+- **Clipboard:** keys can't be seen (above), so Desktop FX follows
+  `global.display.get_selection()` `owner-changed` for the CLIPBOARD:
+  any new owner = "copied" (copy and cut of text look the same); files with
+  `x-special/gnome-copied-files` content starting `cut` = "files cut".
+  Memory sources (GNOME keeping the clipboard after an app quits, or the
+  shell/extensions setting it) are ignored. Paste is NOT detectable; the
+  user chose this over taking over the clipboard.
+- **System FX events:** ignore what devices report for `SETTLE_MS` after
+  starting to watch (no burst at login). Wi-Fi off waits `SWITCH_WAIT_MS`
+  (longer while another Wi-Fi connection is ACTIVATING): if a different
+  network comes up it's `wifi-switch`, else `wifi-off`. Same network, new
+  BSSID = `wifi-switch` too, at most once per `ROAM_MS`. A new default
+  sound device resets the volume baseline (no animation for the jump).
+  VPN = NM types `vpn`, `wireguard`, `tun`.
 - Window slam is decided from geometry after the drop (`_snapSide`): the
   window must have changed size and now fill a half / quarter / the whole
   work area. Works with Ubuntu's tiling-assistant, which tiles on its own.
@@ -151,30 +188,37 @@ in design units of a 1080p screen, placed inside the monitor; the extension
 scales by `mon.height / 1080`. Fireworks are a list of scenes with a `delay`
 (ms) each, one small canvas per burst (never one full-screen canvas).
 
+**scenes.js (System FX):** every scene is a box centred on its anchor
+(`centred()` / `box()` from draw.js), 1080p design units, scaled by the
+monitor and the `size` setting.
+
 **scenes.js (Desktop FX):** edge-relative drawings use the same
 `{fwd, back, half}` frame as effects.js and go through `place(spec, dir)`;
 ripples use `centred()`. Ripples are designed for a 24px cursor (scaled by
-cursor size × size setting); slam / gate / flames for a 1080p screen. The
-battery fire is the one long-running canvas: it redraws at ~30fps and draws
-all flames as ONE path with ONE gradient to stay cheap. The cursor trail is
+cursor size × size setting); slam / gate / battery for a 1080p screen. The
+low battery warning is the one long-running canvas: it redraws at ~30fps and draws
+only a few shapes and ONE gradient per frame to stay cheap. The cursor trail is
 not Cairo: it's a fixed pool of St widgets moved every tick (no actors
 created per frame), and it skips all work while the mouse rests.
 
 ## Testing
 
 Do NOT start a second gnome-shell on the user's laptop (headless, nested or
-devkit): a headless test shell grabbed the GPU and hung the machine. Use the
-tools below; the user tests in their real session.
+devkit): a headless test shell grabbed the GPU and hung the machine. The
+user does all real-GNOME testing; the offline Node tools below are fine
+(they never touch GNOME).
 
 - `cd tools/effects-preview && npm install`, then:
   - `npm run preview` (or `-- warp`): Edge Portal effects to `out/*.png`.
-  - `npm run scenes` (or `-- push`): Terminal FX + Desktop FX scenes to
+  - `npm run scenes` (or `-- push`): Terminal, Desktop and System FX scenes to
     `out/scene-*.png`. Env vars: `SHOT=0.6` zoom, `TIMES=0.2,0.5` (fractions
     of the scene), `CROP=x,y,w,h` (design units).
-  - `npm test` (or `-- edge` / `-- desktop` / `-- terminal`): runs the real
-    Edge Portal, Terminal FX and Desktop FX `extension.js` against a fake GNOME (`gnome-mock.mjs`:
-    manual clock, St/Clutter/GLib/Gio/Meta/Main stubs, simulated pointer,
-    keys, window drags, UPower). Checks behaviour, errors, and that
+  - `npm test` (or `-- edge` / `-- desktop` / `-- terminal` / `-- system`):
+    runs every extension's real `extension.js` against a fake GNOME
+    (`gnome-mock.mjs`: manual clock, St/Clutter/GLib/Gio/Meta/Main stubs,
+    simulated pointer, keys, window drags, UPower, clipboard, NetworkManager,
+    Bluetooth, the mixer and the lock screen; dynamic `import('gi://X')` is
+    rewritten to the mock). Checks behaviour, errors, and that
     `disable()` leaves no actors, timers, timelines, watchers or unredirect holds; saves
     rough screenshots to `out/test-*.png`. Add a scenario there for new
     behaviour. All of these fail on NaN/Infinity coordinates.

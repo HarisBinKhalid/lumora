@@ -8,7 +8,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {LiveConfig, listen} from './config.js';
 import {Unredirect} from './unredirect.js';
-import {place, ripple, RIPPLE_STYLES, slam, crossEntry, crossExit, makeFlames} from './scenes.js';
+import {
+    place, ripple, RIPPLE_STYLES, slam, crossEntry, crossExit, makeLowBattery, batteryCharged,
+    clipCopy, clipCut,
+} from './scenes.js';
 
 // Defaults; the Lumora app changes these live via ~/.config/lumora/config.json
 const DEFAULTS = {
@@ -21,9 +24,12 @@ const DEFAULTS = {
     rippleSize: 1,
     windowSlam: true,             // dust + shockwave when a window snaps to an edge
     windowCross: true,            // light gate when a dragged window changes monitor
-    batteryFire: true,
+    batteryFire: true,            // the low battery warning (kept its old name)
     batteryLevel: 10,             // percent
-    batteryKeepBurning: true,     // false = a short burst at each percent lost
+    batteryKeepBurning: true,     // false = a short warning at each percent lost
+    batteryFull: true,            // animation when charged up to batteryFullLevel
+    batteryFullLevel: 100,
+    clipboard: ['copy', 'cut'],
     combo: true,
     comboMin: 10,                 // keys before the counter shows
     comboCorner: 'bottom-right',
@@ -45,7 +51,7 @@ const BUTTONS = Clutter.ModifierType.BUTTON1_MASK | Clutter.ModifierType.BUTTON2
 const FLAGS = {
     cursor: 'desktop-fx-cursor-on',     // trail, click ripples
     windows: 'desktop-fx-windows-on',   // window slam, crossing screens
-    desktop: 'desktop-fx-desktop-on',   // battery fire, typing combo
+    desktop: 'desktop-fx-desktop-on',   // battery, typing combo, clipboard
 };
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -95,7 +101,8 @@ export default class DesktopFxExtension extends Extension {
         this._follows = [];            // overlays that follow a window
         this._ripples = 0;
         this._trail = null;
-        this._fire = null;
+        this._low = null;
+        this._clipWatch = false;
         this._combo = null;
         this._battery = null;
         this._previewTrailUntil = 0;
@@ -128,7 +135,8 @@ export default class DesktopFxExtension extends Extension {
         this._stopTicker();
         this._setIdleWatch(false);
         this._setGrabSignals(false);
-        this._stopFire(true);
+        this._stopLow(true);
+        this._setClipboardWatch(false);
         this._endCombo(true);
         this._clearTrail();
         if (this._preview) {
@@ -167,6 +175,7 @@ export default class DesktopFxExtension extends Extension {
         const on = this._on, cfg = this._cfg.values;
         this._setIdleWatch((on.cursor && cfg.ripples) || (on.desktop && cfg.combo));
         this._setGrabSignals(on.windows && (cfg.windowSlam || cfg.windowCross));
+        this._setClipboardWatch(on.desktop && cfg.clipboard.length > 0);
         if (this._wantTicker())
             this._startTicker();
         if (!on.cursor || !cfg.trail)
@@ -810,7 +819,7 @@ export default class DesktopFxExtension extends Extension {
         this._follows = keep;
     }
 
-    // ---------- Battery fire ----------
+    // ---------- Battery: low warning and fully charged ----------
 
     _watchBattery() {
         this._batteryCancel = new Gio.Cancellable();
@@ -829,55 +838,96 @@ export default class DesktopFxExtension extends Extension {
             });
     }
 
-    _batteryLow() {
+    // {pct, state} of the battery, or null (no battery / no info yet).
+    // UPower states: 1 charging, 2 discharging, 3 empty, 4 fully charged,
+    // 5 pending charge, 6 pending discharge.
+    _batteryState() {
         const p = this._upower;
         if (!p)
             return null;
         const get = name => p.get_cached_property(name)?.unpack();
-        const present = get('IsPresent'), pct = get('Percentage'), state = get('State');
-        // UPower states: 2 = discharging, 3 = empty, 6 = pending discharge.
-        if (!present || typeof pct !== 'number' || ![2, 3, 6].includes(state))
+        const pct = get('Percentage'), state = get('State');
+        if (!get('IsPresent') || typeof pct !== 'number')
             return null;
-        return pct <= Math.max(1, Math.min(100, this._cfg.values.batteryLevel)) ? Math.floor(pct) : null;
+        return {pct, state};
     }
 
     _batteryCheck() {
         if (!this._cfg)
             return;
         const cfg = this._cfg.values;
-        const pct = this._on.desktop && cfg.batteryFire ? this._batteryLow() : null;
-        if (pct === null) {
-            this._lastFirePct = null;
-            if (this._fire && !this._fire.preview)
-                this._stopFire();
+        const b = this._on.desktop ? this._batteryState() : null;
+        this._checkCharged(b, cfg);
+
+        // Low battery warning.
+        const level = Math.max(1, Math.min(100, cfg.batteryLevel));
+        const low = cfg.batteryFire && b && [2, 3, 6].includes(b.state) && b.pct <= level
+            ? Math.floor(b.pct) : null;
+        if (low === null) {
+            this._lastLowPct = null;
+            if (this._low && !this._low.preview)
+                this._stopLow();
             return;
         }
         if (cfg.batteryKeepBurning) {
-            this._startFire(0);
-        } else if (this._lastFirePct === null || pct < this._lastFirePct) {
-            this._startFire(8000);      // a short burst at each percent lost
+            this._startLow(0, low);
+        } else if (this._lastLowPct === null || low < this._lastLowPct) {
+            this._startLow(8000, low);  // a short warning at each percent lost
         }
-        this._lastFirePct = pct;
+        this._lastLowPct = low;
     }
 
-    // ms = 0 burns until stopped.
-    _startFire(ms, preview = false) {
+    // Charged up to the chosen level while plugged in: play once, then wait
+    // until it's unplugged or drops a few percent before it can play again.
+    _checkCharged(b, cfg) {
+        if (!b || !cfg.batteryFull) {
+            this._chargedPrimed = false;   // look again from scratch next time
+            return;
+        }
+        const level = Math.max(5, Math.min(100, cfg.batteryFullLevel));
+        const plugged = [1, 4, 5].includes(b.state);
+        const reached = plugged && (b.pct >= level - 0.5 || (b.state === 4 && level >= 95));
+        if (!this._chargedPrimed) {
+            // Just switched on (or started): no animation for a charge that
+            // was already there.
+            this._chargedPrimed = true;
+            this._chargedShown = reached;
+            return;
+        }
+        if (reached && !this._chargedShown) {
+            this._chargedShown = true;
+            this._playCharged();
+        } else if (!plugged || b.pct < level - 3) {
+            this._chargedShown = false;
+        }
+    }
+
+    _playCharged() {
         const mon = Main.layoutManager.primaryMonitor;
-        if (this._fire) {
-            if (this._fire.stopId) {
-                GLib.source_remove(this._fire.stopId);
-                this._timeouts.delete(this._fire.stopId);
-                this._fire.stopId = 0;
+        const sc = this._monScale(mon);
+        // Same strip and battery as the low battery warning, in green.
+        this._playPlaced(batteryCharged(mon.width / sc, 0.65), mon.x + mon.width / 2,
+            mon.y + mon.height, sc, mon);
+    }
+
+    // ms = 0 shows the warning until stopped.
+    _startLow(ms, pct, preview = false) {
+        const mon = Main.layoutManager.primaryMonitor;
+        if (this._low) {
+            if (this._low.stopId) {
+                GLib.source_remove(this._low.stopId);
+                this._timeouts.delete(this._low.stopId);
+                this._low.stopId = 0;
             }
-            this._fire.fadeTo = 1;
+            this._low.fadeTo = 1;
         } else {
             const sc = this._monScale(mon);
-            const flames = makeFlames(mon.width / sc);
+            const drawing = makeLowBattery(mon.width / sc);
             const area = new St.DrawingArea({
-                x: mon.x, y: mon.y + mon.height - Math.ceil(flames.h * sc),
-                width: mon.width, height: Math.ceil(flames.h * sc), reactive: false,
+                x: mon.x, y: mon.y + mon.height - Math.ceil(drawing.h * sc),
+                width: mon.width, height: Math.ceil(drawing.h * sc), reactive: false,
             });
-            const fire = {area, flames, sc, strength: 0, fadeTo: 1, preview, stopId: 0,
+            const low = {area, drawing, sc, strength: 0, fadeTo: 1, preview, stopId: 0, pct,
                 start: GLib.get_monotonic_time() / 1e6};
             area.connect('repaint', a => {
                 const cr = a.get_context();
@@ -885,8 +935,8 @@ export default class DesktopFxExtension extends Extension {
                     cr.setOperator(Cairo.Operator.CLEAR);
                     cr.paint();
                     cr.setOperator(Cairo.Operator.OVER);
-                    cr.scale(fire.sc, fire.sc);
-                    fire.flames.draw(cr, GLib.get_monotonic_time() / 1e6 - fire.start, fire.strength);
+                    cr.scale(low.sc, low.sc);
+                    low.drawing.draw(cr, GLib.get_monotonic_time() / 1e6 - low.start, low.strength, low.pct);
                 } catch (e) {
                     if (!this._drawErrorLogged) {
                         this._drawErrorLogged = true;
@@ -897,32 +947,33 @@ export default class DesktopFxExtension extends Extension {
                 }
             });
             this._add(area);
-            // About 30 fps is plenty for flickering flames.
-            fire.timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
-                fire.strength += Math.sign(fire.fadeTo - fire.strength) * 0.04;
-                fire.strength = Math.max(0, Math.min(1, fire.strength));
-                if (fire.fadeTo === 0 && fire.strength <= 0) {
-                    fire.timerId = 0;
-                    this._stopFire(true);
+            // About 30 fps is plenty for a blinking warning.
+            low.timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+                low.strength += Math.sign(low.fadeTo - low.strength) * 0.04;
+                low.strength = Math.max(0, Math.min(1, low.strength));
+                if (low.fadeTo === 0 && low.strength <= 0) {
+                    low.timerId = 0;
+                    this._stopLow(true);
                     return GLib.SOURCE_REMOVE;
                 }
                 if (!this._locked())
                     area.queue_repaint();
                 return GLib.SOURCE_CONTINUE;
             });
-            this._fire = fire;
+            this._low = low;
         }
-        this._fire.preview = preview;
+        this._low.preview = preview;
+        this._low.pct = pct;
         if (ms > 0)
-            this._fire.stopId = this._later(ms, () => {
-                if (this._fire)
-                    this._fire.stopId = 0;
-                this._stopFire();
+            this._low.stopId = this._later(ms, () => {
+                if (this._low)
+                    this._low.stopId = 0;
+                this._stopLow();
             });
     }
 
-    _stopFire(instant = false) {
-        const f = this._fire;
+    _stopLow(instant = false) {
+        const f = this._low;
         if (!f)
             return;
         if (!instant) {
@@ -931,8 +982,60 @@ export default class DesktopFxExtension extends Extension {
         }
         if (f.timerId)
             GLib.source_remove(f.timerId);
-        this._fire = null;
+        this._low = null;
         this._remove(f.area);
+    }
+
+    // ---------- Clipboard ----------
+
+    // GNOME can't tell extensions which keys were pressed, so this follows
+    // the clipboard instead: something new on it = copied (or cut; they look
+    // the same), files marked "cut" by the Files app = cut. Pasting can't be
+    // seen at all.
+    _setClipboardWatch(on) {
+        const selection = global.display.get_selection();
+        if (on === !!this._clipWatch)
+            return;
+        this._clipWatch = on;
+        if (on) {
+            selection.connectObject('owner-changed', (_sel, type, source) =>
+                this._safe(() => this._clipChanged(type, source)), this);
+        } else {
+            selection.disconnectObject(this);
+        }
+    }
+
+    _clipChanged(type, source) {
+        if (type !== Meta.SelectionType.SELECTION_CLIPBOARD || !source || !this._on.desktop || this._locked())
+            return;
+        // A memory source is GNOME itself (or an extension) setting the
+        // clipboard, e.g. keeping it alive after the app that copied quit.
+        if (source instanceof Meta.SelectionSourceMemory)
+            return;
+        const now = GLib.get_monotonic_time() / 1000;
+        if (now - (this._lastClip ?? 0) < 250)
+            return;
+        this._lastClip = now;
+        const kinds = this._cfg.values.clipboard;
+        const FILES = 'x-special/gnome-copied-files';
+        if ((source.get_mimetypes() ?? []).includes(FILES)) {
+            St.Clipboard.get_default().get_content(St.ClipboardType.CLIPBOARD, FILES, (_c, bytes) => {
+                this._safe(() => {
+                    const data = bytes?.get_data?.();
+                    const text = data ? new TextDecoder().decode(data.slice(0, 8)) : '';
+                    const kind = text.startsWith('cut') ? 'cut' : 'copy';
+                    if (this._clipWatch && kinds.includes(kind))
+                        this._clipAnim(kind);
+                });
+            });
+        } else if (kinds.includes('copy')) {
+            this._clipAnim('copy');
+        }
+    }
+
+    _clipAnim(kind, at = null) {
+        const [x, y] = at ?? global.get_pointer();
+        this._playPlaced(kind === 'cut' ? clipCut() : clipCopy(), x, y, this._cursorScale());
     }
 
     // ---------- Typing combo ----------
@@ -1080,8 +1183,12 @@ export default class DesktopFxExtension extends Extension {
             this._playPlaced(place(crossExit(r.height / sc), [1, 0]), cx - 281, cy, sc, mon);
             this._playPlaced(place(crossEntry(r.height / sc), [1, 0]), cx - 280, cy, sc, mon);
             this._materialize(null, [1, 0], r);
-        } else if (cmd === 'fire') {
-            this._startFire(8000, true);
+        } else if (cmd === 'lowbattery') {
+            this._startLow(8000, 7, true);
+        } else if (cmd === 'charged') {
+            this._playCharged();
+        } else if (cmd === 'copy' || cmd === 'cut') {
+            this._clipAnim(cmd, [cx, cy]);
         } else if (cmd === 'combo') {
             this._endCombo(true);
             this._combo = {halfKeys: 0, last: 0, fast: 0, shown: 0, ui: null, endId: 0};

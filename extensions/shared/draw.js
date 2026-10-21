@@ -103,6 +103,47 @@ export function glowStroke(cr, pts, c, a, w, f = 1) {
     cr.stroke();
 }
 
+// Points along a circular arc (angles in radians, 0 = right, clockwise
+// because y points down). For glowStroke.
+export function arcPts(cx, cy, r, a0, a1, n = 24) {
+    return Array.from({length: n + 1}, (_, i) => {
+        const a = a0 + (a1 - a0) * (i / n);
+        return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+    });
+}
+
+// Rounded rectangle path (fill or stroke it afterwards).
+export function roundRect(cr, x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    cr.moveTo(x + r, y);
+    cr.lineTo(x + w - r, y);
+    cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+    cr.lineTo(x + w, y + h - r);
+    cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+    cr.lineTo(x + r, y + h);
+    cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+    cr.lineTo(x, y + r);
+    cr.arc(x + r, y + r, r, Math.PI, Math.PI * 1.5);
+    cr.closePath();
+}
+
+// A drawing centred on its anchor, inside a box of radius r (scenes that
+// play around a point: ripples, status icons...).
+export function centred(duration, r, draw) {
+    return box(duration, r * 2, r * 2, draw);
+}
+
+// Same, with a w x h box centred on the anchor.
+export function box(duration, w, h, draw) {
+    return {
+        duration, w, h, ox: w / 2, oy: h / 2,
+        draw(cr, t) {
+            cr.translate(w / 2, h / 2);
+            draw(cr, t);
+        },
+    };
+}
+
 // Jagged line by midpoint displacement (lightning, cracks).
 export function jagged(x1, y1, x2, y2, rough = 0.25, iters = 5) {
     let pts = [[x1, y1], [x2, y2]];

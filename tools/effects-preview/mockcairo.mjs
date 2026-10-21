@@ -18,6 +18,6 @@ export function wrap(c) {
     setLineWidth(w){chk(w);c.lineWidth=w}, setLineCap(v){c.lineCap=v}, setLineJoin(v){c.lineJoin=v},
     setSourceRGBA(r,g,b,a){chk(r,g,b,a); const s=`rgba(${r*255|0},${g*255|0},${b*255|0},${Math.max(0,Math.min(1,a))})`; c.fillStyle=s; c.strokeStyle=s},
     setSource(g){const gr=g.make(c); for(const [o,s] of g.stops) gr.addColorStop(o,s); c.fillStyle=gr; c.strokeStyle=gr},
-    fill(){c.fill();c.beginPath()}, fillPreserve(){c.fill()}, stroke(){c.stroke();c.beginPath()},
+    fill(){c.fill();c.beginPath()}, clip(){c.clip();c.beginPath()}, fillPreserve(){c.fill()}, stroke(){c.stroke();c.beginPath()},
   };
 }

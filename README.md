@@ -12,8 +12,11 @@ Screen animations for GNOME:
   commands that ran over a minute get fireworks (a grand finale after five).
 - **Desktop FX**: a cursor trail, click ripples, a dust-and-shockwave slam
   when you snap a window to a screen edge, a gate of light when you drag a
-  window onto another monitor, flames when the battery runs low, and an
-  arcade typing combo counter.
+  window onto another monitor, a low battery warning, a "charged" animation,
+  copy / cut animations and an arcade typing combo counter.
+- **System FX**: animations when Wi-Fi, Bluetooth or a VPN connects or
+  disconnects (and when Wi-Fi moves to another network), when the volume or
+  microphone changes, and when the screen locks or unlocks.
 - **Lumora app**: pick animations, sizes and colors; changes apply instantly.
 
 ## Install

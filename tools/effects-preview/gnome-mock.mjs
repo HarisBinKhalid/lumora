@@ -223,6 +223,10 @@ export const Meta = {
             errors.push('enable_unredirect called more often than disable');
     },
     BarrierDirection: {POSITIVE_X: 1, POSITIVE_Y: 2, NEGATIVE_X: 4, NEGATIVE_Y: 8},
+    SelectionType: {SELECTION_PRIMARY: 0, SELECTION_CLIPBOARD: 1, SELECTION_DND: 2},
+    get SelectionSourceMemory() {
+        return SelectionSourceMemory;
+    },
     Barrier: class extends Obj {
         constructor(props) {
             super();
@@ -351,7 +355,22 @@ class DrawingArea extends Actor {
     }
 }
 
+// The clipboard: what St.Clipboard.get_content() reads back.
+export const clipboardData = new Map();     // mimetype -> string
+
 export const St = {
+    ClipboardType: {PRIMARY: 0, CLIPBOARD: 1},
+    Clipboard: {
+        get_default: () => ({
+            get_content(_type, mime, cb) {
+                addSource(2, () => {
+                    const v = clipboardData.get(mime);
+                    cb(null, v === undefined ? null : {get_data: () => new TextEncoder().encode(v)});
+                    return false;
+                });
+            },
+        }),
+    },
     Widget: class extends Actor {},
     DrawingArea,
     Label: class extends Actor {},
@@ -389,7 +408,144 @@ export const Main = {
         },
     }),
     sessionMode: {isLocked: false},
+    panel: {height: 32},
+    screenShield: Object.assign(new Obj(), {locked: false}),
 };
+
+// The clipboard owner changing (an app copied something).
+export const selection = new Obj();
+export class SelectionSource {
+    constructor(mimes) {
+        this.mimes = mimes;
+    }
+    get_mimetypes() {
+        return this.mimes;
+    }
+}
+export class SelectionSourceMemory extends SelectionSource {}
+
+// ---------- Sound (Gvc, via GNOME's getMixerControl) ----------
+
+export class Stream extends Obj {
+    constructor(volume = 30000, muted = false) {
+        super();
+        this.volume = volume;
+        this.is_muted = muted;
+    }
+    set(props) {
+        for (const [k, v] of Object.entries(props)) {
+            this[k] = v;
+            this.emit(`notify::${k.replace('_', '-')}`);
+        }
+    }
+}
+export const mixer = Object.assign(new Obj(), {
+    sink: new Stream(), source: new Stream(),
+    get_default_sink() {
+        return this.sink;
+    },
+    get_default_source() {
+        return this.source;
+    },
+    get_vol_max_norm: () => 65536,
+});
+export const getMixerControl = () => mixer;
+
+// ---------- NetworkManager ----------
+
+export class Device extends Obj {
+    constructor(bssid) {
+        super();
+        this.bssid = bssid;
+    }
+    get_active_access_point() {
+        return this.bssid ? {get_bssid: () => this.bssid} : null;
+    }
+    roam(bssid) {
+        this.bssid = bssid;
+        this.emit('notify::active-access-point');
+    }
+}
+export class ActiveConnection extends Obj {
+    constructor(type, id, state, dev = null) {
+        super();
+        Object.assign(this, {type, id, state, dev});
+    }
+    get_connection_type() {
+        return this.type;
+    }
+    get_id() {
+        return this.id;
+    }
+    get_state() {
+        return this.state;
+    }
+    get_vpn() {
+        return this.type === 'vpn';
+    }
+    get_devices() {
+        return this.dev ? [this.dev] : [];
+    }
+    setState(st) {
+        this.state = st;
+        this.emit('notify::state');
+    }
+}
+export const nmClient = Object.assign(new Obj(), {
+    acs: [],
+    get_active_connections() {
+        return this.acs;
+    },
+    add(ac) {
+        this.acs.push(ac);
+        this.emit('active-connection-added', ac);
+    },
+    removeAc(ac) {
+        this.acs = this.acs.filter(a => a !== ac);
+        this.emit('active-connection-removed', ac);
+    },
+});
+export const NM = {
+    ActiveConnectionState: {UNKNOWN: 0, ACTIVATING: 1, ACTIVATED: 2, DEACTIVATING: 3, DEACTIVATED: 4},
+    Client: {
+        new_async(_cancel, cb) {
+            addSource(5, () => {
+                cb(null, 'res');
+                return false;
+            });
+        },
+        new_finish: () => nmClient,
+    },
+};
+
+// ---------- Bluetooth (GnomeBluetooth 3.0) ----------
+
+export class BtDevice extends Obj {
+    constructor(path, alias, connected = false) {
+        super();
+        Object.assign(this, {path, alias, name: alias, connected});
+    }
+    get_object_path() {
+        return this.path;
+    }
+    setConnected(c) {
+        this.connected = c;
+        this.emit('notify::connected');
+    }
+}
+export const btDevices = [];
+export const GnomeBluetooth = {
+    Client: class extends Obj {
+        constructor() {
+            super();
+            btClients.push(this);
+        }
+        get_devices() {
+            return {get_n_items: () => btDevices.length, get_item: i => btDevices[i]};
+        }
+    },
+};
+export const btClients = [];
 
 export const pointer = {x: 100, y: 100, mods: 0};
 const idleWatches = new Map();
@@ -409,7 +565,7 @@ export const globalObj = {
             },
         }),
     },
-    display,
+    display: Object.assign(display, {get_selection: () => selection}),
     stage: {width: 3840, height: 2160},
 };
 // One input event happened (like mutter's idle monitor resetting).

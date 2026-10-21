@@ -53,14 +53,14 @@ function drawAt(ctx, pieces, ms) {
     }
 }
 
-function sheet(name, make, screen = [W, H], bg = '#1d2330') {
+function sheet(name, make, screen = [W, H], bg = '#1d2330', crop = null, shot = SHOT) {
     if (only && !name.includes(only))
         return;
     const [sw, sh] = screen;
     const pieces = [].concat(make(sw, sh));
-    const [cx0, cy0, cw, ch] = CROP ?? [0, 0, sw, sh];
+    const [cx0, cy0, cw, ch] = CROP ?? crop ?? [0, 0, sw, sh];
     const total = Math.max(...pieces.map(p => (p.delay || 0) + p.duration));
-    const tw = Math.round(cw * SHOT), th = Math.round(ch * SHOT);
+    const tw = Math.round(cw * shot), th = Math.round(ch * shot);
     const c = createCanvas(tw * FRAMES, th);
     const s = c.getContext('2d');
     for (let i = 0; i < FRAMES; i++) {
@@ -68,7 +68,7 @@ function sheet(name, make, screen = [W, H], bg = '#1d2330') {
         s.save();
         s.beginPath(); s.rect(i * tw, 0, tw, th); s.clip();
         s.fillStyle = bg; s.fillRect(i * tw, 0, tw, th);
-        s.translate(i * tw, 0); s.scale(SHOT, SHOT); s.translate(-cx0, -cy0);
+        s.translate(i * tw, 0); s.scale(shot, shot); s.translate(-cx0, -cy0);
         drawAt(s, pieces, ms);
         s.restore();
         s.strokeStyle = '#555'; s.strokeRect(i * tw + 0.5, 0.5, tw - 1, th - 1);
@@ -100,5 +100,13 @@ if (fs.existsSync(deskFile)) {
     const desk = await load(deskFile);
     for (const [name, make] of Object.entries(desk.PREVIEWS ?? {}))
         sheet(name, make, [W, H], '#3a3f4b');
+}
+
+// System FX scenes are small and centred: show just that part of the screen.
+const sysFile = path.join(ext, 'system-fx@local/scenes.js');
+if (fs.existsSync(sysFile)) {
+    const sys = await load(sysFile);
+    for (const [name, make] of Object.entries(sys.PREVIEWS ?? {}))
+        sheet(name, make, [W, H], '#3a3f4b', [W / 2 - 300, H / 2 - 170, 600, 340], Number(process.env.SHOT) || 0.6);
 }
 fs.rmSync(tmp, {recursive: true, force: true});

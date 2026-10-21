@@ -21,11 +21,13 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 RUNTIME_DIR = GLib.get_user_runtime_dir()
 GObjectBindSync = GObject.BindingFlags.SYNC_CREATE
 
-EDGE_UUID, TERM_UUID, DESK_UUID = "edge-portal@local", "term-fx@local", "desktop-fx@local"
+EDGE_UUID, TERM_UUID, DESK_UUID, SYS_UUID = "edge-portal@local", "term-fx@local", "desktop-fx@local", "system-fx@local"
 EDGE_FLAG, TERM_FLAG = "edge-portal-on", "term-fx-on"
 # Desktop FX has one switch per tab, so each can be on or off on its own.
 CURSOR_FLAG, WINDOWS_FLAG, DESKTOP_FLAG = "desktop-fx-cursor-on", "desktop-fx-windows-on", "desktop-fx-desktop-on"
-EDGE_PREVIEW_PORT, TERM_PORT, DESK_PREVIEW_PORT = 47322, 47321, 47323
+# System FX: one switch per tab too.
+CONN_FLAG, SOUND_FLAG, LOCK_FLAG = "system-fx-connections-on", "system-fx-sound-on", "system-fx-lock-on"
+EDGE_PREVIEW_PORT, TERM_PORT, DESK_PREVIEW_PORT, SYS_PREVIEW_PORT = 47322, 47321, 47323, 47324
 
 EFFECTS = [
     ("teleport", "Teleport", "Implodes on exit, a portal bursts open on entry"),
@@ -45,6 +47,33 @@ GIT_EFFECTS = [
 TRAIL_STYLES = [("comet", "Comet"), ("rainbow", "Rainbow"), ("sparkles", "Sparkles"), ("stars", "Stars")]
 RIPPLE_STYLES = [("ripple", "Water ripple"), ("shockwave", "Shockwave"), ("sparks", "Sparks"),
                  ("confetti", "Confetti pop")]
+CONNECTION_FX = [
+    ("wifi-on", "Wi-Fi connects", "The Wi-Fi signal lights up and sends out a wave"),
+    ("wifi-off", "Wi-Fi disconnects", "The signal bars die out and crumble"),
+    ("wifi-switch", "Wi-Fi changes network", "A beam carries the signal from the old access point to the new one"),
+    ("bt-on", "Bluetooth device connects", "The Bluetooth rune is drawn and two devices pair up"),
+    ("bt-off", "Bluetooth device disconnects", "The rune splits in two and drifts apart"),
+    ("vpn-on", "VPN connects", "A shield forms and a padlock clicks shut"),
+    ("vpn-off", "VPN disconnects", "The shield cracks and falls apart"),
+]
+SOUND_FX = [
+    ("vol-up", "Volume up", "Sound waves roll out"),
+    ("vol-down", "Volume down", "Sound waves pull back in"),
+    ("vol-max", "Volume at 100%", "The speaker shakes and blasts shockwaves"),
+    ("vol-zero", "Volume at 0%", "The waves drain away to a flat line"),
+    ("mute", "Sound muted", "A red slash cuts the waves"),
+    ("unmute", "Sound unmuted", "The slash clears and green waves bloom"),
+    ("mic-mute", "Microphone muted", "The voice ripples are cut off"),
+    ("mic-unmute", "Microphone unmuted", "Voice ripples rise on both sides"),
+]
+LOCK_FX = [
+    ("lock", "Screen locks", "Light gathers and the padlock clicks shut"),
+    ("unlock", "Screen unlocks", "The padlock springs open in a burst of gold"),
+]
+CLIPBOARD_FX = [
+    ("copy", "Copied", "A page duplicates next to the cursor (copying or cutting anything)"),
+    ("cut", "Files cut", "Scissors snip a line (files cut in the Files app)"),
+]
 COMMAND_MODES = [("fx", "Only with fx"), ("all", "Every command")]
 CORNERS = [("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"),
            ("top-right", "Top right"), ("top-left", "Top left")]
@@ -87,6 +116,16 @@ DEFAULTS = {
         "combo": True,
         "comboMin": 10,
         "comboCorner": "bottom-right",
+        "batteryFull": True,
+        "batteryFullLevel": 100,
+        "clipboard": [e[0] for e in CLIPBOARD_FX],
+    },
+    "system": {
+        "connections": [e[0] for e in CONNECTION_FX],
+        "showNames": True,
+        "sound": [e[0] for e in SOUND_FX],
+        "lock": [e[0] for e in LOCK_FX],
+        "size": 1.0,
     },
 }
 
@@ -223,6 +262,10 @@ class Window(Adw.ApplicationWindow):
         self._add_tab(self._cursor_page(), "cursor", "Cursor", "input-mouse-symbolic")
         self._add_tab(self._windows_page(), "windows", "Windows", "focus-windows-symbolic")
         self._add_tab(self._desktop_page(), "desktop", "Desktop", "battery-caution-symbolic")
+        self._add_tab(self._connections_page(), "connections", "Connections",
+                      "network-wireless-symbolic")
+        self._add_tab(self._sound_page(), "sound", "Sound", "audio-volume-high-symbolic")
+        self._add_tab(self._lock_page(), "lock", "Lock screen", "system-lock-screen-symbolic")
         self.tabs.select_row(self.tabs.get_row_at_index(0))
 
         self._refresh_status()
@@ -640,25 +683,46 @@ class Window(Adw.ApplicationWindow):
     def _desktop_page(self):
         c = self.cfg["desktop"]
         page = Adw.PreferencesPage()
-        page.add(self._desk_status(DESKTOP_FLAG, "Battery fire and the typing combo"))
+        page.add(self._desk_status(DESKTOP_FLAG, "Battery, clipboard and the typing combo"))
 
-        group = Adw.PreferencesGroup(title="Battery fire",
-                                     description="Flames along the bottom of your main screen "
-                                                 "when the battery runs low (not while charging).")
-        fire = self._switch("Battery fire", None, c["batteryFire"],
-                            lambda on: self._set("desktop", "batteryFire", on))
-        fire.add_suffix(self._preview_button(lambda: self._preview_desk("fire")))
-        group.add(fire)
+        # (The low battery setting keys still say "batteryFire": it used to be flames.)
+        group = Adw.PreferencesGroup(title="Battery")
+        low = self._switch("Low battery warning", "A nearly empty battery blinks at the bottom of "
+                           "your main screen, with a red pulse along the edge", c["batteryFire"],
+                           lambda on: self._set("desktop", "batteryFire", on))
+        low.add_suffix(self._preview_button(lambda: self._preview_desk("lowbattery")))
+        group.add(low)
         rows = [
-            self._spin("Starts below", "Percent", c["batteryLevel"], 1, 50, 1, 0,
+            self._spin("Warn below", "Percent, while not charging", c["batteryLevel"], 1, 50, 1, 0,
                        lambda v: self._set("desktop", "batteryLevel", int(v))),
-            self._switch("Keep burning until plugged in",
-                         "Off: a short burst each time it drops another percent",
+            self._switch("Keep showing until plugged in",
+                         "Off: a short warning each time it drops another percent",
                          c["batteryKeepBurning"],
                          lambda on: self._set("desktop", "batteryKeepBurning", on)),
         ]
         for row in rows:
-            fire.bind_property("active", row, "sensitive", GObjectBindSync)
+            low.bind_property("active", row, "sensitive", GObjectBindSync)
+            group.add(row)
+        full = self._switch("Charged", "The same battery at the bottom fills up green, with a green "
+                            "glow along the edge, when charging reaches the level below", c["batteryFull"],
+                            lambda on: self._set("desktop", "batteryFull", on))
+        full.add_suffix(self._preview_button(lambda: self._preview_desk("charged")))
+        group.add(full)
+        level = self._spin("Charged at", "Percent", c["batteryFullLevel"], 50, 100, 1, 0,
+                           lambda v: self._set("desktop", "batteryFullLevel", int(v)))
+        full.bind_property("active", level, "sensitive", GObjectBindSync)
+        group.add(level)
+        page.add(group)
+
+        group = Adw.PreferencesGroup(
+            title="Clipboard",
+            description="GNOME doesn’t tell apps which keys you press, so these follow the clipboard: "
+                        "copying or cutting text looks the same, and pasting can’t be detected.")
+        for key, title, sub in CLIPBOARD_FX:
+            row = self._switch(title, sub, key in c["clipboard"],
+                               lambda on, k=key: self._toggle_list("desktop", "clipboard",
+                                                                   [e[0] for e in CLIPBOARD_FX], k, on))
+            row.add_suffix(self._preview_button(lambda k=key: self._preview_desk(k)))
             group.add(row)
         page.add(group)
 
@@ -680,6 +744,71 @@ class Window(Adw.ApplicationWindow):
             combo.bind_property("active", row, "sensitive", GObjectBindSync)
             group.add(row)
         page.add(group)
+        return page
+
+    # ---------- System FX pages (Connections, Sound, Lock screen) ----------
+
+    def _preview_sys(self, name):
+        if not send(SYS_PREVIEW_PORT, f"preview {name}"):
+            self.toast("System FX isn’t running yet — log out and back in once")
+
+    # A group with one switch + preview button per animation in `effects`.
+    def _effects_group(self, title, description, key, effects):
+        c = self.cfg["system"]
+        group = Adw.PreferencesGroup(title=title, description=description or "")
+        order = [e[0] for e in effects]
+        for name, label, sub in effects:
+            row = self._switch(label, sub, name in c[key],
+                               lambda on, n=name: self._toggle_list("system", key, order, n, on))
+            row.add_suffix(self._preview_button(lambda n=name: self._preview_sys(n)))
+            group.add(row)
+        return group
+
+    def _size_group(self):
+        group = Adw.PreferencesGroup(title="Size")
+        row = self._spin("Animation size", "Shared by the Connections, Sound and Lock screen tabs",
+                         self.cfg["system"]["size"], 0.5, 2.5, 0.1, 1, self._sys_size_changed)
+        self._sys_size_rows = getattr(self, "_sys_size_rows", []) + [row]
+        group.add(row)
+        return group
+
+    def _sys_size_changed(self, value):
+        self._set("system", "size", round(value, 1))
+        for row in self._sys_size_rows:          # keep the copies on other tabs in step
+            if abs(row.get_value() - value) > 1e-6:
+                row.set_value(value)
+
+    def _connections_page(self):
+        page = Adw.PreferencesPage()
+        page.add(self._status_group(SYS_UUID, CONN_FLAG, "Wi-Fi, Bluetooth and VPN connecting and "
+                                    "disconnecting. Plays at the top middle of your main screen, under the top bar."))
+        page.add(self._effects_group("Wi-Fi", None, "connections", CONNECTION_FX[:3]))
+        page.add(self._effects_group("Bluetooth", None, "connections", CONNECTION_FX[3:5]))
+        page.add(self._effects_group("VPN", "VPNs set up in GNOME’s settings (NetworkManager), "
+                                     "including WireGuard.", "connections", CONNECTION_FX[5:]))
+        group = Adw.PreferencesGroup()
+        group.add(self._switch("Show names", "The network or device name under the animation "
+                               "(never on the lock screen)", self.cfg["system"]["showNames"],
+                               lambda on: self._set("system", "showNames", on)))
+        page.add(group)
+        page.add(self._size_group())
+        return page
+
+    def _sound_page(self):
+        page = Adw.PreferencesPage()
+        page.add(self._status_group(SYS_UUID, SOUND_FLAG, "Volume and microphone changes, from the "
+                                    "keyboard keys or anywhere else."))
+        page.add(self._effects_group("Volume", None, "sound", SOUND_FX[:6]))
+        page.add(self._effects_group("Microphone", None, "sound", SOUND_FX[6:]))
+        page.add(self._size_group())
+        return page
+
+    def _lock_page(self):
+        page = Adw.PreferencesPage()
+        page.add(self._status_group(SYS_UUID, LOCK_FLAG, "Locking and unlocking the screen. "
+                                    "Plays in the middle of your main screen."))
+        page.add(self._effects_group("Lock screen", None, "lock", LOCK_FX))
+        page.add(self._size_group())
         return page
 
     def _toggle_list(self, section, key, order, item, on):

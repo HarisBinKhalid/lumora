@@ -6,7 +6,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$DIR/build"
 APPDIR="$HOME/.local/share/lumora"
 CONF="$HOME/.config/lumora"
-EXTENSIONS=(edge-portal@local term-fx@local desktop-fx@local)
+EXTENSIONS=(edge-portal@local term-fx@local desktop-fx@local system-fx@local)
 
 echo "== Lumora installer =="
 
@@ -52,7 +52,7 @@ cat > "$HOME/.local/share/applications/local.lumora.Settings.desktop" << DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Lumora
-Comment=Screen animations for monitor crossing and terminal commands
+Comment=Screen animations for your desktop, terminal and system events
 Exec=python3 $APPDIR/lumora.py
 Icon=$APPDIR/lumora.svg
 Categories=Settings;Utility;
