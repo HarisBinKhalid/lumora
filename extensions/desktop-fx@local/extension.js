@@ -7,6 +7,7 @@ import Cairo from 'cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {LiveConfig, listen} from './config.js';
+import {Unredirect} from './unredirect.js';
 import {place, ripple, RIPPLE_STYLES, slam, crossEntry, crossExit, makeFlames} from './scenes.js';
 
 // Defaults; the Lumora app changes these live via ~/.config/lumora/config.json
@@ -83,6 +84,7 @@ export default class DesktopFxExtension extends Extension {
             ([k, name]) => [k, GLib.build_filenamev([GLib.get_user_runtime_dir(), name])]));
         this._on = {cursor: false, windows: false, desktop: false};
         this._actors = new Set();      // top-level actors we added to the stage
+        this._unredirect = new Unredirect();
         this._timelines = new Set();
         this._timeouts = new Set();
         this._tickId = 0;
@@ -149,6 +151,7 @@ export default class DesktopFxExtension extends Extension {
             a.destroy();
         }
         this._actors.clear();
+        this._unredirect.release();
         this._follows = [];
         this._grab = null;
         this._cfg?.destroy();
@@ -196,6 +199,7 @@ export default class DesktopFxExtension extends Extension {
     _add(actor) {
         Main.uiGroup.add_child(actor);
         this._actors.add(actor);
+        this._updateUnredirect();
         return actor;
     }
 
@@ -203,7 +207,17 @@ export default class DesktopFxExtension extends Extension {
         if (!this._actors.has(actor))
             return;
         this._actors.delete(actor);
+        this._updateUnredirect();
         actor.destroy();
+    }
+
+    // Keep GNOME compositing while anything of ours is visible (see
+    // unredirect.js). A resting cursor trail shows nothing, so it doesn't count.
+    _updateUnredirect() {
+        let n = this._actors.size;
+        if (this._trail?.quiet && this._actors.has(this._trail.layer))
+            n--;
+        this._unredirect.set(n > 0);
     }
 
     // An empty click-through container covering every monitor; children
@@ -491,6 +505,7 @@ export default class DesktopFxExtension extends Extension {
                 tr.pts.shift();
             this._layoutRibbon(tr, now, life);
             tr.quiet = tr.pts.length < 2;
+            this._updateUnredirect();
         } else {
             // Particles thrown off as the cursor moves.
             let spawn = Math.min(4, Math.floor(moved / 9));
@@ -530,6 +545,7 @@ export default class DesktopFxExtension extends Extension {
                     a.rotation_angle_z = p.spin * age;
             }
             tr.quiet = !tr.pool.some(p => p.live);
+            this._updateUnredirect();
         }
         tr.lastX = x;
         tr.lastY = y;

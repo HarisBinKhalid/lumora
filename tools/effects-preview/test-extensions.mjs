@@ -14,7 +14,7 @@ const which = process.argv[2];
 // Each extension runs in its own process so the fake GNOME starts clean.
 if (!which) {
     let failed = false;
-    for (const w of ['desktop', 'terminal']) {
+    for (const w of ['edge', 'desktop', 'terminal']) {
         const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), w], {stdio: 'inherit'});
         failed ||= r.status !== 0;
     }
@@ -145,6 +145,7 @@ if (which === 'desktop') {
     shot('trail-comet', 300, 350, 900, 300, 1);
     advance(600);
     check(findAll(a => a.width > 0 && a.width < 20 && a.opacity > 0).length === 0, 'comet trail fades away when the mouse stops');
+    check(mock.unredirect.held === 0, 'resting cursor: no hold on direct scanout');
 
     for (const style of ['rainbow', 'sparkles', 'stars']) {
         config({desktop: {trailStyle: style}});
@@ -172,9 +173,11 @@ if (which === 'desktop') {
         advance(150);
         const areas = findAll(a => a._canvas);
         check(areas.length === 1, `${style}: one ripple drawn on click`);
+        check(mock.unredirect.held === 1, `${style}: keeps GNOME drawing over full-screen apps while showing`);
         shot(`ripple-${style}`, 700, 300, 200, 200, 1.5);
         advance(1000);
         check(findAll(a => a._canvas).length === 0, `${style}: ripple removed when done`);
+        check(mock.unredirect.held === 0, `${style}: lets GNOME go back to direct scanout after`);
     }
     // A click seen by both the ticker and the idle watch must fire once.
     pointer.mods = 1024; advance(20); inputEvent(); advance(20);
@@ -338,6 +341,7 @@ if (which === 'desktop') {
     check(mock.pendingSources() === 0, `disable: no timers left (${mock.pendingSources()})`);
     check(mock.runningTimelines() === 0, 'disable: no animations left running');
     check(mock.idleWatchCount() === 0 && display.handlerCount() === 0, 'disable: input watching removed');
+    check(mock.unredirect.held === 0, 'disable: unredirect hold released');
     check(battery.proxy.handlerCount() === 0, 'disable: battery signal disconnected');
     check(!fs.has('/run/user/1000/lumora/desktop-fx@local.running'), 'disable: running marker removed');
     check(mock.dirMonitorCount() === 0, 'disable: settings watcher removed');
@@ -351,6 +355,40 @@ if (which === 'desktop') {
 }
 
 // ======================================================================
+if (which === 'edge') {
+    console.log('Edge Portal');
+    const {Ext, meta} = await loadExtension('edge-portal@local');
+    const ext = new Ext(meta);
+    ext.enable();
+    advance(100);
+    pointer.x = 1800; pointer.y = 500;
+    advance(200);
+    check(stage().length === 0 && mock.barriers.size === 0, 'switch off: no barriers, nothing drawn');
+    fs.set('/run/user/1000/edge-portal-on', '');
+    advance(1100);
+    check(mock.barriers.size > 0, `switch on: ${mock.barriers.size} edge barriers`);
+    pointer.x = 1910; advance(32);
+    pointer.x = 1950; advance(32);                 // onto the right-hand monitor
+    check(findAll(a => a._canvas).length === 2, 'crossing: exit + entry halves drawn');
+    check(mock.unredirect.held === 1, 'crossing: shown over a maximised app on the other screen');
+    shot('edge-cross', 1500, 200, 900, 600, 0.6);
+    advance(3000);
+    check(stage().length === 0 && mock.unredirect.held === 0, 'crossing: cleaned up, hold released');
+    for (const b of mock.barriers)
+        b.emit('hit', {x: 0, y: 600, dx: -20, dy: 0});
+    advance(50);
+    check(stage().length > 0 && mock.unredirect.held === 1, 'barrier glow: shown and held');
+    advance(2000);
+    check(stage().length === 0 && mock.unredirect.held === 0, 'barrier glow: cleaned up, hold released');
+    pointer.x = 1900; advance(32); pointer.x = 1940; advance(32);
+    ext.disable();
+    check(stage().length === 0, 'disable: every actor removed');
+    check(mock.unredirect.held === 0, 'disable: unredirect hold released');
+    check(mock.barriers.size === 0, 'disable: barriers removed');
+    check(mock.dirMonitorCount() === 0, 'disable: settings watcher removed');
+    noErrors('edge portal');
+}
+
 if (which === 'terminal') {
     console.log('Terminal FX');
     const {Ext, meta, mod} = await loadExtension('term-fx@local');
@@ -381,10 +419,12 @@ if (which === 'terminal') {
         advance(1500);
         const areas = findAll(a => a._canvas);
         check(areas.length === 1, `${name}: scene playing`);
+        check(mock.unredirect.held === 1, `${name}: shown over full-screen apps`);
         check(!findAll(a => a.text === 'Command failed').length, `${name}: no plain warning banner on top of it`);
         shot(`term-${name}`, 0, 0, 1920, 1080, 0.3);
         advance(4000);
         check(stage().length === 0, `${name}: cleaned up`);
+        check(mock.unredirect.held === 0, `${name}: hold released`);
     }
     noErrors('git scenes');
 

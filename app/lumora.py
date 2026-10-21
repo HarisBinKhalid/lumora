@@ -45,6 +45,7 @@ GIT_EFFECTS = [
 TRAIL_STYLES = [("comet", "Comet"), ("rainbow", "Rainbow"), ("sparkles", "Sparkles"), ("stars", "Stars")]
 RIPPLE_STYLES = [("ripple", "Water ripple"), ("shockwave", "Shockwave"), ("sparks", "Sparks"),
                  ("confetti", "Confetti pop")]
+COMMAND_MODES = [("fx", "Only with fx"), ("all", "Every command")]
 CORNERS = [("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"),
            ("top-right", "Top right"), ("top-left", "Top left")]
 
@@ -64,6 +65,7 @@ DEFAULTS = {
         "warning": True,
         "failGlow": True,
         "warningSeconds": 1.8,
+        "commandMode": "fx",
         "gitEffects": [e[0] for e in GIT_EFFECTS],
         "longCommand": True,
         "longMinutes": 1.0,
@@ -449,7 +451,17 @@ class Window(Adw.ApplicationWindow):
         c = self.cfg["terminal"]
         page = Adw.PreferencesPage()
         page.add(self._status_group(TERM_UUID, TERM_FLAG,
-                                    "Animations when a command run with fx finishes"))
+                                    "Animations when a terminal command finishes"))
+
+        group = Adw.PreferencesGroup(
+            title="Which commands",
+            description="“Every command” (bash only) gives even ls and cd an animation. "
+                        "It switches instantly; terminals opened before installing this "
+                        "update need reopening once. On a server over SSH, put "
+                        "TERM_FX_ALL=1 in its ~/.bashrc instead.")
+        group.add(self._combo("Animate", "Only with fx: put fx in front, e.g. fx make", COMMAND_MODES, c["commandMode"],
+                              lambda v: self._set("terminal", "commandMode", v)))
+        page.add(group)
 
         group = Adw.PreferencesGroup(title="When a command succeeds")
         row = self._switch("Confetti", "Falls from the top of your main screen", c["confetti"],

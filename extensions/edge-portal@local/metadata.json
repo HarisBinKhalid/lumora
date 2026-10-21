@@ -3,5 +3,5 @@
   "name": "Lumora Edge Portal",
   "description": "Plays a teleport or shatter animation when the mouse moves between monitors.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 9
+  "version": 10
 }

@@ -30,3 +30,6 @@ Effects switch off at every restart; turn them on in the Lumora app.
     fx npm test
     fx git push
     fx eval "npm run lint && npm test"
+
+Or pick **Animate → Every command** under Terminal FX in the app, and every
+command you run in bash gets an animation, no `fx` needed.

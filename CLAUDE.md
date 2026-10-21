@@ -30,6 +30,13 @@ Screen animations for GNOME on Ubuntu (Wayland). Four parts:
    and flag file, so they work independently; the user asked for that).
 
 Plus `shell/fx.sh`, the `fx` bash function users put in front of commands.
+It also has an optional "every command" hook (bash only: DEBUG trap +
+PROMPT_COMMAND) that reports commands typed without `fx`. It is active when
+`"terminal": {"commandMode": "all"}` is in config.json (read with bash
+built-ins at each prompt, no processes spawned) or `TERM_FX_ALL=1` (for
+servers over SSH). It never installs over an existing DEBUG trap and keeps
+any existing PROMPT_COMMAND (string or array). The extension doesn't read
+`commandMode`; it's in term-fx DEFAULTS only to keep the lists in sync.
 
 ## Layout
 
@@ -40,8 +47,10 @@ extensions/term-fx@local/              extension.js, scenes.js (git + fireworks)
 extensions/desktop-fx@local/           extension.js, scenes.js (ripples, slam, gate, flames), metadata.json
 extensions/shared/config.js            SINGLE SOURCE: LiveConfig + localhost listener
 extensions/shared/draw.js              SINGLE SOURCE: Cairo helpers (glow, puff, glowStroke, explosion...)
+extensions/shared/unredirect.js        SINGLE SOURCE: keeps overlays visible over full-screen-covering apps
 shell/fx.sh                            the fx command (installed to ~/.config/lumora/fx.sh)
 tools/effects-preview/                 renders + tests everything without GNOME (see Testing)
+tools/test-fx-hook.py                  tests fx.sh's "every command" bash hook in a real pty
 install.sh                             builds build/*.zip from source and installs everything
 ```
 
@@ -96,6 +105,13 @@ Edit the source here and run `./install.sh`.
 - Extensions must be click-through and safe: overlays are `reactive: false`,
   every timer/actor/listener is cleaned up in `disable()`, errors are caught
   and logged rather than thrown in loops.
+- **Overlays must stay visible over apps:** when one app covers a whole
+  monitor (e.g. maximised on a screen without the top bar), GNOME scans it
+  out directly and skips drawing the shell there, hiding our effects. Every
+  extension holds `Unredirect` (shared/unredirect.js) while it has anything
+  on screen (set from `_add`/`_remove`/`_finish`, released in `disable()`;
+  a resting cursor trail doesn't count). `actor.ease()` does this by itself,
+  but Cairo timelines and per-tick updates don't. Keep the hold balanced.
 - Never put unvalidated config values into CSS strings (see `_barrierColor`,
   `_rippleRgb`). CSS colours come from fixed lists in the code.
 - The user has multiple monitors, including one placed ABOVE the primary.
@@ -155,13 +171,15 @@ tools below; the user tests in their real session.
   - `npm run scenes` (or `-- push`): Terminal FX + Desktop FX scenes to
     `out/scene-*.png`. Env vars: `SHOT=0.6` zoom, `TIMES=0.2,0.5` (fractions
     of the scene), `CROP=x,y,w,h` (design units).
-  - `npm test` (or `-- desktop` / `-- terminal`): runs the real Terminal FX
-    and Desktop FX `extension.js` against a fake GNOME (`gnome-mock.mjs`:
+  - `npm test` (or `-- edge` / `-- desktop` / `-- terminal`): runs the real
+    Edge Portal, Terminal FX and Desktop FX `extension.js` against a fake GNOME (`gnome-mock.mjs`:
     manual clock, St/Clutter/GLib/Gio/Meta/Main stubs, simulated pointer,
     keys, window drags, UPower). Checks behaviour, errors, and that
-    `disable()` leaves no actors, timers, timelines or watchers; saves
+    `disable()` leaves no actors, timers, timelines, watchers or unredirect holds; saves
     rough screenshots to `out/test-*.png`. Add a scenario there for new
     behaviour. All of these fail on NaN/Infinity coordinates.
+- `python3 tools/test-fx-hook.py`: the fx.sh "every command" hook in a real
+  interactive bash (modes, empty Enter, fx not doubled, PROMPT_COMMAND forms).
 - Syntax: `node --check --input-type=module < extensions/edge-portal@local/extension.js`
   (same for the others), `python3 -m py_compile app/lumora.py`, `bash -n install.sh`.
 - Logs (real session): `journalctl -f -o cat /usr/bin/gnome-shell`.

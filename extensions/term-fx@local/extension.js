@@ -6,6 +6,7 @@ import Cairo from 'cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {LiveConfig, listen} from './config.js';
+import {Unredirect} from './unredirect.js';
 import {SCENES, fireworks} from './scenes.js';
 
 const PORT = 47321;           // must match TERM_FX_PORT in fx.sh
@@ -19,6 +20,9 @@ const DEFAULTS = {
     warning: true,
     failGlow: true,
     warningSeconds: 1.8,
+    // 'fx' or 'all'. Read by fx.sh (its prompt hook), not by this file; kept
+    // here so every DEFAULTS list matches.
+    commandMode: 'fx',
     // git commands with their own animation (instead of confetti / the banner).
     gitEffects: ['push', 'pull', 'commit', 'merge'],
     // Fireworks when a command took a long time: small show from longMinutes,
@@ -88,6 +92,7 @@ export default class TerminalFxExtension extends Extension {
         this._markRunning(true);
         this._flagPath = GLib.build_filenamev([GLib.get_user_runtime_dir(), FLAG_NAME]);
         this._actors = new Set();
+        this._unredirect = new Unredirect();
         this._timelines = new Set();
         this._timeouts = new Set();
         this._warning = null;
@@ -122,6 +127,7 @@ export default class TerminalFxExtension extends Extension {
             a.destroy();
         }
         this._actors.clear();
+        this._unredirect.release();
         this._warning = null;
         this._cfg?.destroy();
         this._cfg = null;
@@ -319,6 +325,7 @@ export default class TerminalFxExtension extends Extension {
     _add(actor) {
         Main.uiGroup.add_child(actor);
         this._actors.add(actor);
+        this._unredirect.set(true);
         return actor;
     }
 
@@ -326,6 +333,7 @@ export default class TerminalFxExtension extends Extension {
         if (!this._actors.has(actor))
             return;
         this._actors.delete(actor);
+        this._unredirect.set(this._actors.size > 0);
         actor.destroy();
     }
 

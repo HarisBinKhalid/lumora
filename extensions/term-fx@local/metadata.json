@@ -3,5 +3,5 @@
   "name": "Lumora Terminal FX",
   "description": "Confetti when a command prefixed with fx succeeds, a warning banner when it fails, rockets for git push/pull, fireworks for long commands.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 7
+  "version": 8
 }

@@ -216,7 +216,28 @@ export const Meta = {
         RESIZING_N: 1 | DIR.N, RESIZING_S: 1 | DIR.S, RESIZING_E: 1 | DIR.E, RESIZING_W: 1 | DIR.W,
         RESIZING_NE: 1 | DIR.N | DIR.E,
     },
+    // GNOME counts these; every disable must be matched by an enable.
+    disable_unredirect_for_display: () => unredirect.held++,
+    enable_unredirect_for_display() {
+        if (--unredirect.held < 0)
+            errors.push('enable_unredirect called more often than disable');
+    },
+    BarrierDirection: {POSITIVE_X: 1, POSITIVE_Y: 2, NEGATIVE_X: 4, NEGATIVE_Y: 8},
+    Barrier: class extends Obj {
+        constructor(props) {
+            super();
+            Object.assign(this, props);
+            barriers.add(this);
+        }
+        destroy() {
+            barriers.delete(this);
+        }
+    },
 };
+// How many times unredirect is currently turned off (0 = GNOME may skip
+// drawing the shell over a full-screen app).
+export const unredirect = {held: 0};
+export const barriers = new Set();
 
 // ---------- St (actors) ----------
 

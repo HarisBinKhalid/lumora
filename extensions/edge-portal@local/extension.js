@@ -8,6 +8,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {EFFECTS, setLineBoost} from './effects.js';
 import {LiveConfig, listen} from './config.js';
+import {Unredirect} from './unredirect.js';
 
 // Defaults; the Lumora app changes these live via ~/.config/lumora/config.json
 const DEFAULTS = {
@@ -54,6 +55,7 @@ export default class EdgePortalExtension extends Extension {
     enable() {
         this._markRunning(true);
         this._actors = new Set();
+        this._unredirect = new Unredirect();
         this._lastMonitor = -1;
         this._lastFire = 0;
         this._timerId = 0;
@@ -111,6 +113,7 @@ export default class EdgePortalExtension extends Extension {
         }
         this._actors.clear();
         this._actors = null;
+        this._unredirect.release();
         this._ifaceSettings = null;
     }
 
@@ -452,6 +455,7 @@ export default class EdgePortalExtension extends Extension {
         });
         Main.uiGroup.add_child(area);
         this._actors.add(area);
+        this._unredirect.set(true);
 
         const tl = new Clutter.Timeline({actor: area, duration});
         area._edgeTimeline = tl;
@@ -500,6 +504,7 @@ export default class EdgePortalExtension extends Extension {
         actor.set_pivot_point(0.5, 0.5);
         Main.uiGroup.add_child(actor);
         this._actors.add(actor);
+        this._unredirect.set(true);
         return actor;
     }
 
@@ -507,6 +512,7 @@ export default class EdgePortalExtension extends Extension {
         if (!this._actors || !this._actors.has(actor))
             return;
         this._actors.delete(actor);
+        this._unredirect.set(this._actors.size > 0);
         actor._edgeTimeline?.stop();
         actor._edgeTimeline = null;
         actor.destroy();
