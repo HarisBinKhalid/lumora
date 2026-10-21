@@ -243,42 +243,108 @@ if (which === 'desktop') {
     check(findAll(a => a._canvas || /border: 3px/.test(a.style)).length === 0, 'crossing: everything removed after');
     noErrors('window crossing');
 
-    // --- window snapped to the left edge ---
+    // --- window snapped to an edge ---
     display.emit('grab-op-end', win, mock.Meta.GrabOp.MOVING);
-    const win2 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
-    display.emit('grab-op-begin', win2, mock.Meta.GrabOp.MOVING);
-    advance(100);
-    win2.rect = {x: 0, y: 32, width: 960, height: 1048};   // tiled left
-    display.emit('grab-op-end', win2, mock.Meta.GrabOp.MOVING);
-    advance(200);
-    const slamArea = findAll(a => a._canvas);
-    check(slamArea.length === 1, 'slam: plays when a window snaps to the left half');
-    check(slamArea[0] && slamArea[0].parent.clip_to_allocation, 'slam: clipped to its monitor');
-    shot('slam-left', 0, 0, 700, 1080, 0.5);
+    advance(1700);
+    const snapFx = () => ({
+        beam: findAll(a => a._canvas).length,
+        frame: findAll(a => /border: 2px solid/.test(a.style)).length,
+        brackets: findAll(a => a.children.length === 2 && a.children.every(c => /215, 240, 255/.test(c.style))).length,
+    });
+    const drop = (w, op = mock.Meta.GrabOp.MOVING) => {
+        display.emit('grab-op-begin', w, op);
+        advance(50);
+        display.emit('grab-op-end', w, op);
+    };
+    const LEFT = {x: 0, y: 32, width: 960, height: 1048}, RIGHT = {x: 960, y: 32, width: 960, height: 1048};
+    // A slow app: the tile lands 700ms after the drop (the old code gave up at 380ms).
+    const w1 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
+    pointer.x = 5; pointer.y = 400;
+    drop(w1);
+    advance(700);
+    check(snapFx().beam === 0, 'snap: nothing before the window has actually moved');
+    w1.set(LEFT);
+    advance(120);
+    const fx = snapFx();
+    check(fx.beam === 1 && fx.frame === 0 && fx.brackets === 0,
+        `snap left (slow app): just the edge beam, no window outline (${JSON.stringify(fx)})`);
+    const beam = findAll(a => a._canvas)[0];
+    check(beam.y <= 32 - 30 && beam.y + beam.height >= 1080, `the beam covers the whole left edge (y ${beam.y}..${beam.y + beam.height})`);
+    check(findAll(a => a._canvas)[0].parent.clip_to_allocation, 'snap: clipped to its monitor');
+    advance(300);                       // the fake applies eases at their end
+    shot('snap-left', 0, 0, 1000, 1080, 0.5);
     advance(1200);
-    // Moved but not snapped: no slam.
-    const win3 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
-    display.emit('grab-op-begin', win3, mock.Meta.GrabOp.MOVING);
-    win3.rect.x = 0;
-    display.emit('grab-op-end', win3, mock.Meta.GrabOp.MOVING);
-    advance(600);
-    check(findAll(a => a._canvas).length === 0, 'slam: a window just moved to the edge (same size) does not slam');
-    // Resizing is not a move.
-    display.emit('grab-op-begin', win3, mock.Meta.GrabOp.RESIZING_NE);
-    win3.rect = {x: 0, y: 32, width: 1920, height: 1048};
-    display.emit('grab-op-end', win3, mock.Meta.GrabOp.RESIZING_NE);
-    advance(600);
-    check(findAll(a => a._canvas).length === 0, 'slam: resizing a window is ignored');
+    check(stage().length === 0, 'snap: everything removed after');
+    // A terminal: resizes in whole rows/columns, so it stops short of the
+    // edges; the tiling assistant still knows the rectangle it meant.
+    const term = new FakeWindow({x: 400, y: 300, width: 700, height: 500}, 0);
+    drop(term);
+    term.tiledRect = {...RIGHT};
+    term.isTiled = true;
+    term.set({x: 960, y: 32, width: 951, height: 1031});
+    advance(150);
+    check(snapFx().beam === 1, 'snap right: a terminal that stops short of the edges still counts');
+    advance(1500);
+    // GNOME's own tiling (no tiling assistant), also a little short.
+    const w2 = new FakeWindow({x: 400, y: 300, width: 700, height: 500}, 0);
+    drop(w2);
+    w2.set({x: 0, y: 32, width: 955, height: 1030}, mock.Meta.MaximizeFlags.VERTICAL);
+    advance(150);
+    check(snapFx().beam === 1, 'snap left: GNOME tiling, window a little short');
+    advance(1500);
+    // Already on the left half, dragged to the right half: same size, still a snap.
+    const w3 = new FakeWindow(LEFT, 0);
+    pointer.x = 1915; pointer.y = 600;
+    drop(w3);
+    w3.set(RIGHT);
+    advance(150);
+    const rightBeam = findAll(a => a._canvas)[0];
+    check(rightBeam && rightBeam.parent.x + rightBeam.x > 1700, 'left half -> right half: snaps on the right edge');
+    advance(1500);
+    // Clicked the title bar of a snapped window without moving it: nothing.
+    const w4 = new FakeWindow(LEFT, 0);
+    drop(w4);
+    advance(1700);
+    check(snapFx().beam === 0 && stage().length === 0, 'title bar clicked without moving: nothing');
+    // Moved freely so it touches the left edge (not full height): nothing.
+    const w5 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
+    drop(w5);
+    w5.set({x: 0, y: 200, width: 700, height: 500});
+    advance(1700);
+    check(stage().length === 0, 'window just moved against the edge: nothing');
+    // Resizing is not a drag.
+    const w6 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
+    drop(w6, mock.Meta.GrabOp.RESIZING_NE);
+    w6.set({x: 0, y: 32, width: 1920, height: 1048});
+    advance(1700);
+    check(stage().length === 0, 'resizing a window: nothing');
     // Maximised by dragging to the top.
-    const win4 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
-    display.emit('grab-op-begin', win4, mock.Meta.GrabOp.MOVING);
-    win4.rect = {x: 0, y: 32, width: 1920, height: 1048};
-    display.emit('grab-op-end', win4, mock.Meta.GrabOp.MOVING);
+    const w7 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
+    pointer.x = 1200; pointer.y = 33;
+    drop(w7);
+    w7.set({x: 0, y: 32, width: 1920, height: 1048}, mock.Meta.MaximizeFlags.BOTH);
+    advance(120);
+    const topBeam = findAll(a => a._canvas)[0];
+    check(topBeam && topBeam.parent.y === 0 && topBeam.y <= 40 && topBeam.x <= -30 && topBeam.x + topBeam.width >= 1950,
+        `maximise: beam along the whole top edge (x ${topBeam?.x}..${topBeam && topBeam.x + topBeam.width}, y ${topBeam?.y})`);
+    advance(120);
+    shot('snap-top', 0, 0, 1920, 400, 0.5);
+    advance(1500);
+    // Snap lands after more than 1.5s: given up (no late surprise).
+    const w8 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
+    drop(w8);
+    advance(1800);
+    w8.set(LEFT);
     advance(200);
-    const top = findAll(a => a._canvas)[0];
-    check(top && top.parent.y === 0 && top.y <= 40, `slam: maximise slams the top edge (canvas at y=${top?.y})`);
-    shot('slam-top', 0, 0, 1920, 400, 0.4);
-    advance(1200);
+    check(stage().length === 0 && w8.handlerCount() === 0, 'gives up after 1.5s and stops watching the window');
+    // Turned off mid-watch: stops watching straight away.
+    const w9 = new FakeWindow({x: 300, y: 200, width: 700, height: 500}, 0);
+    drop(w9);
+    allOff();
+    advance(1100);
+    check(w9.handlerCount() === 0, 'Windows switch off: stops watching the dropped window');
+    allOn();
+    advance(1100);
     noErrors('window slam');
 
     // --- low battery warning ---

@@ -74,6 +74,23 @@ CLIPBOARD_FX = [
     ("copy", "Copied", "A page duplicates next to the cursor (copying or cutting anything)"),
     ("cut", "Files cut", "Scissors snip a line (files cut in the Files app)"),
 ]
+# The Home tab: one "Animations on" switch per tab.
+# (flag, tab name, title, icon, subtitle)
+HOME_TABS = [
+    ("edge-portal-on", "edge", "Edge Portal", "video-display-symbolic",
+     "Moving the mouse between monitors"),
+    ("term-fx-on", "terminal", "Terminal FX", "utilities-terminal-symbolic",
+     "Commands finishing in the terminal"),
+    ("desktop-fx-cursor-on", "cursor", "Cursor", "input-mouse-symbolic", "Cursor trail and click ripples"),
+    ("desktop-fx-windows-on", "windows", "Windows", "focus-windows-symbolic", "Snapping and moving windows"),
+    ("desktop-fx-desktop-on", "desktop", "Desktop", "battery-caution-symbolic",
+     "Battery, clipboard and typing combo"),
+    ("system-fx-connections-on", "connections", "Connections", "network-wireless-symbolic",
+     "Wi-Fi, Bluetooth and VPN"),
+    ("system-fx-sound-on", "sound", "Sound", "audio-volume-high-symbolic", "Volume and microphone"),
+    ("system-fx-lock-on", "lock", "Lock screen", "system-lock-screen-symbolic", "Locking and unlocking"),
+]
+
 COMMAND_MODES = [("fx", "Only with fx"), ("all", "Every command")]
 CORNERS = [("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"),
            ("top-right", "Top right"), ("top-left", "Top left")]
@@ -226,6 +243,7 @@ class Window(Adw.ApplicationWindow):
         self.cfg = load_config()
         self._save_id = 0
         self._status = []  # (uuid, flag, state_row, enable_btn, switch_row)
+        self._home_switches = []  # (flag, switch_row) on the Home tab
 
         # Tabs live in a scrollable sidebar (not the header bar), so any number fits.
         self.split = Adw.NavigationSplitView(min_sidebar_width=180, max_sidebar_width=240)
@@ -257,6 +275,7 @@ class Window(Adw.ApplicationWindow):
         narrow.add_setter(self.split, "collapsed", True)
         self.add_breakpoint(narrow)
 
+        self._add_tab(self._home_page(), "home", "Home", "go-home-symbolic")
         self._add_tab(self._edge_page(), "edge", "Edge Portal", "video-display-symbolic")
         self._add_tab(self._term_page(), "terminal", "Terminal FX", "utilities-terminal-symbolic")
         self._add_tab(self._cursor_page(), "cursor", "Cursor", "input-mouse-symbolic")
@@ -281,6 +300,66 @@ class Window(Adw.ApplicationWindow):
         row = Gtk.ListBoxRow(child=box)
         row.tab_name, row.tab_title = name, title
         self.tabs.append(row)
+
+    def _open_tab(self, name):
+        i = 0
+        while (row := self.tabs.get_row_at_index(i)) is not None:
+            if row.tab_name == name:
+                self.tabs.select_row(row)
+                self.split.set_show_content(True)
+                return
+            i += 1
+
+    # ---------- Home: every "Animations on" switch in one place ----------
+
+    def _home_page(self):
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(
+            title="Lumora",
+            description="Switch animations on here or on each tab: they're the same switches. "
+                        "They all switch off when you restart.")
+        self._all_btn = Gtk.Button(label="Enable all", halign=Gtk.Align.CENTER, margin_top=6)
+        self._all_btn.add_css_class("pill")
+        self._all_btn.add_css_class("suggested-action")
+        self._all_btn.connect("clicked", lambda _b: self._toggle_all())
+        group.add(self._all_btn)
+        page.add(group)
+
+        group = Adw.PreferencesGroup(title="Animations on")
+        for flag, name, title, icon, sub in HOME_TABS:
+            row = Adw.SwitchRow(title=title, subtitle=sub)
+            row.add_prefix(Gtk.Image(icon_name=icon))
+            row.set_active(os.path.exists(flag_path(flag)))
+            row.connect("notify::active", lambda r, _p, f=flag: self._flag_switched(f, r.get_active()))
+            go = Gtk.Button(icon_name="go-next-symbolic", valign=Gtk.Align.CENTER,
+                            tooltip_text=f"Open the {title} settings")
+            go.add_css_class("flat")
+            go.connect("clicked", lambda _b, n=name: self._open_tab(n))
+            row.add_suffix(go)
+            group.add(row)
+            self._home_switches.append((flag, row))
+        page.add(group)
+        self._update_all_button()
+        return page
+
+    def _all_on(self):
+        return all(os.path.exists(flag_path(flag)) for flag, *_rest in HOME_TABS)
+
+    def _toggle_all(self):
+        on = not self._all_on()
+        for flag, *_rest in HOME_TABS:
+            self._flag_switched(flag, on)
+        self._update_all_button()
+
+    def _update_all_button(self):
+        if not hasattr(self, "_all_btn"):
+            return
+        on = self._all_on()
+        self._all_btn.set_label("Turn all off" if on else "Enable all")
+        if on:
+            self._all_btn.remove_css_class("suggested-action")
+        else:
+            self._all_btn.add_css_class("suggested-action")
 
     def _tab_selected(self, _list, row):
         if row is not None:
@@ -349,10 +428,12 @@ class Window(Adw.ApplicationWindow):
 
     def _flag_switched(self, flag, on):
         self._set_flag(flag, on)
-        # Several tabs can show the same switch (Desktop FX): keep them in step.
-        for _u, f, _r, _b, sw in self._status:
+        # The same switch shows on its tab and on Home: keep them in step.
+        switches = [(f, sw) for _u, f, _r, _b, sw in self._status] + self._home_switches
+        for f, sw in switches:
             if f == flag and sw.get_active() != on:
                 sw.set_active(on)
+        self._update_all_button()
 
     def _set_flag(self, flag, on):
         path = flag_path(flag)
@@ -393,6 +474,11 @@ class Window(Adw.ApplicationWindow):
             on = os.path.exists(flag_path(flag))
             if sw.get_active() != on:  # e.g. switched off by a restart
                 sw.set_active(on)
+        for flag, sw in self._home_switches:
+            on = os.path.exists(flag_path(flag))
+            if sw.get_active() != on:
+                sw.set_active(on)
+        self._update_all_button()
         self.banner.set_revealed(needs_logout)
         if needs_logout and not self._asked_logout:
             self._asked_logout = True  # ask once per launch; the banner stays as a reminder
@@ -667,8 +753,9 @@ class Window(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         page.add(self._desk_status(WINDOWS_FLAG, "Animations when you drag windows"))
         group = Adw.PreferencesGroup(title="Dragging windows")
-        row = self._switch("Window slam", "Dust and a shockwave when you drop a window onto a "
-                           "screen edge and it snaps or maximises", c["windowSlam"],
+        row = self._switch("Window snap", "Light runs along the whole screen edge, with sparks and "
+                           "a light shockwave, when a window you drop there snaps or maximises",
+                           c["windowSlam"],
                            lambda on: self._set("desktop", "windowSlam", on))
         row.add_suffix(self._preview_button(lambda: self._preview_desk("slam")))
         group.add(row)

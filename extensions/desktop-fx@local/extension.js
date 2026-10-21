@@ -9,7 +9,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {LiveConfig, listen} from './config.js';
 import {Unredirect} from './unredirect.js';
 import {
-    place, ripple, RIPPLE_STYLES, slam, crossEntry, crossExit, makeLowBattery, batteryCharged,
+    place, ripple, RIPPLE_STYLES, snapEdge, crossEntry, crossExit, makeLowBattery, batteryCharged,
     clipCopy, clipCut,
 } from './scenes.js';
 
@@ -22,7 +22,7 @@ const DEFAULTS = {
     rippleStyle: 'ripple',        // ripple, shockwave, sparks, confetti
     rippleColor: '80, 170, 255',
     rippleSize: 1,
-    windowSlam: true,             // dust + shockwave when a window snaps to an edge
+    windowSlam: true,             // lock-on effect when a dragged window snaps to an edge
     windowCross: true,            // light gate when a dragged window changes monitor
     batteryFire: true,            // the low battery warning (kept its old name)
     batteryLevel: 10,             // percent
@@ -607,6 +607,7 @@ export default class DesktopFxExtension extends Extension {
         } else {
             global.display.disconnectObject(this);
             this._grab = null;
+            this._endSnapWatch();
         }
     }
 
@@ -638,62 +639,108 @@ export default class DesktopFxExtension extends Extension {
         this._grab = null;
         if (!g || g.win !== win || !this._on.windows || !this._cfg.values.windowSlam)
             return;
-        // Snapping happens just after the drop (sometimes by another
-        // extension), so look twice.
-        let done = false;
-        const check = () => {
-            if (done || !win.get_compositor_private())
-                return;
-            const side = this._snapSide(win, g.rect);
-            if (side) {
-                done = true;
-                this._slam(win, side);
-            }
-        };
-        this._later(90, check);
-        this._later(380, check);
+        this._watchSnap(win, g.rect);
     }
 
-    // 'left' / 'right' / 'top' when the window was just snapped or
-    // maximised, else null. Judged from its size and place on the screen.
-    _snapSide(win, before) {
-        const r = win.get_frame_rect();
+    // The snap lands a little after the drop: the tiling assistant (or
+    // GNOME) resizes the window, and the app has to redraw at its new size
+    // first, which big apps can take a while to do. So watch the window for a
+    // moment and play as soon as it has landed in a snapped spot.
+    _watchSnap(win, before) {
+        this._endSnapWatch();
+        const [px, py] = global.get_pointer();
+        const w = {win, before, drop: [px, py], timers: []};
+        const check = () => {
+            if (this._snapWatch !== w || !win.get_compositor_private())
+                return;
+            const snap = this._snapResult(win, before);
+            if (snap) {
+                this._endSnapWatch();
+                this._snapFx(win, snap, w.drop);
+            }
+        };
+        win.connectObject(
+            'size-changed', () => this._safe(check),
+            'position-changed', () => this._safe(check),
+            w);
+        this._snapWatch = w;
+        w.timers = [10, 200, 600, 1500].map(ms => this._later(ms, check));
+        w.timers.push(this._later(1600, () => {
+            if (this._snapWatch === w)
+                this._endSnapWatch();
+        }));
+    }
+
+    _endSnapWatch() {
+        const w = this._snapWatch;
+        if (!w)
+            return;
+        this._snapWatch = null;
+        w.win.disconnectObject(w);
+        for (const id of w.timers)
+            this._cancelLater(id);
+    }
+
+    _cancelLater(id) {
+        if (id && this._timeouts.delete(id))
+            GLib.source_remove(id);
+    }
+
+    // {side: 'left' | 'right' | 'top', rect} when the window was just
+    // snapped to an edge or maximised, else null.
+    _snapResult(win, before) {
         const mon = win.get_monitor();
         if (mon < 0)
             return null;
-        // A window that was only moved keeps its size; a snap changes it.
-        if (Math.abs(r.width - before.width) < 12 && Math.abs(r.height - before.height) < 12)
+        const frame = win.get_frame_rect();
+        // Dropped exactly where it was picked up (a click on the title bar).
+        if (Math.abs(frame.x - before.x) <= 4 && Math.abs(frame.y - before.y) <= 4 &&
+            Math.abs(frame.width - before.width) <= 4 && Math.abs(frame.height - before.height) <= 4)
             return null;
         const wa = Main.layoutManager.getWorkAreaForMonitor(mon);
-        const T = 12;
+        // Ubuntu's tiling assistant keeps the rectangle it tiled the window
+        // to: apps that resize in steps (terminals) stop a little short of it.
+        const t = win.isTiled && win.tiledRect ? win.tiledRect : null;
+        const r = t ? {x: t.x, y: t.y, width: t.width, height: t.height} : frame;
+        const flags = win.get_maximized?.() ?? 0;   // gone in newer GNOME: geometry decides then
+        const BOTH = Meta.MaximizeFlags?.BOTH ?? 3, VERTICAL = Meta.MaximizeFlags?.VERTICAL ?? 2;
+        const T = 32;
         const near = (a, b) => Math.abs(a - b) <= T;
         const left = near(r.x, wa.x), right = near(r.x + r.width, wa.x + wa.width);
         const top = near(r.y, wa.y), bottom = near(r.y + r.height, wa.y + wa.height);
-        if (left && right && top && bottom)
-            return 'top';                     // maximised
-        if (top && bottom)
-            return left ? 'left' : right ? 'right' : null;
-        // Quarter tiles (e.g. Ubuntu's tiling assistant).
-        if ((top || bottom) && (left || right) && r.width < wa.width * 0.75 && r.height < wa.height * 0.75)
-            return left ? 'left' : 'right';
+        if ((flags & BOTH) === BOTH || (left && right && top && bottom))
+            return {side: 'top', rect: frame};
+        const fullHeight = (top && bottom) || (flags & VERTICAL) === VERTICAL;
+        if (fullHeight && left !== right)
+            return {side: left ? 'left' : 'right', rect: frame};
+        // Quarter tiles (the tiling assistant's corners).
+        if ((top || bottom) && left !== right && r.width < wa.width * 0.75 &&
+            r.height < wa.height * 0.75 && r.height > wa.height * 0.25)
+            return {side: left ? 'left' : 'right', rect: frame};
         return null;
     }
 
-    _slam(win, side, rectOverride = null) {
-        const r = rectOverride ?? win.get_frame_rect();
+    // The window has snapped: a beam of light runs along the whole screen
+    // edge it snapped to, starting where it was dropped, with sparks and a
+    // light shockwave.
+    _snapFx(win, {side}, drop) {
         const monIdx = win ? win.get_monitor() : Main.layoutManager.primaryIndex;
         const mon = Main.layoutManager.monitors[monIdx] ?? Main.layoutManager.primaryMonitor;
         const wa = Main.layoutManager.getWorkAreaForMonitor(mon.index);
         const sc = this._monScale(mon);
-        let x, y, dir, len;
+        let x, y, dir, len, origin;
         if (side === 'top') {
-            x = r.x + r.width / 2; y = wa.y; dir = [0, 1]; len = r.width;
+            x = wa.x + wa.width / 2; y = wa.y; dir = [0, 1]; len = wa.width; origin = drop[0] - x;
         } else if (side === 'left') {
-            x = wa.x; y = r.y + r.height / 2; dir = [1, 0]; len = r.height;
+            x = wa.x; y = wa.y + wa.height / 2; dir = [1, 0]; len = wa.height; origin = drop[1] - y;
         } else {
-            x = wa.x + wa.width - 1; y = r.y + r.height / 2; dir = [-1, 0]; len = r.height;
+            x = wa.x + wa.width - 1; y = wa.y + wa.height / 2; dir = [-1, 0]; len = wa.height; origin = drop[1] - y;
         }
-        this._playPlaced(place(slam(len / sc), dir), x, y, sc, mon);
+        // The edge's own frame is rotated to face into the screen, which runs
+        // "along the edge" backwards on the right and top edges.
+        if (side !== 'left')
+            origin = -origin;
+        this._playPlaced(place(snapEdge(len / sc, origin / sc), dir), x, y, sc, mon);
     }
 
     // While a window is being dragged: did it just move to another monitor?
@@ -1173,10 +1220,11 @@ export default class DesktopFxExtension extends Extension {
                 this._later(1 + i * 260, () => this._ripple(cx + dx, cy + dy, style)));
         } else if (cmd === 'slam') {
             const wa = Main.layoutManager.getWorkAreaForMonitor(mon.index);
-            const r = {x: wa.x, y: wa.y + wa.height * 0.15, width: wa.width / 2, height: wa.height * 0.7};
-            this._slam(null, 'left', r);
-            this._later(700, () => this._slam(null, 'top',
-                {x: wa.x + wa.width * 0.2, y: wa.y, width: wa.width * 0.6, height: wa.height}));
+            // A window snapping to the left half, then one maximising.
+            const left = {x: wa.x, y: wa.y, width: Math.round(wa.width / 2), height: wa.height};
+            this._snapFx(null, {side: 'left', rect: left}, [wa.x + 10, wa.y + wa.height * 0.4]);
+            this._later(1400, () => this._snapFx(null, {side: 'top', rect: wa},
+                [wa.x + wa.width * 0.6, wa.y + 10]));
         } else if (cmd === 'cross') {
             const r = {x: cx - 280, y: cy - 180, width: 560, height: 360};
             const sc = this._monScale(mon);

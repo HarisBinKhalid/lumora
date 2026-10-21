@@ -224,6 +224,7 @@ export const Meta = {
     },
     BarrierDirection: {POSITIVE_X: 1, POSITIVE_Y: 2, NEGATIVE_X: 4, NEGATIVE_Y: 8},
     SelectionType: {SELECTION_PRIMARY: 0, SELECTION_CLIPBOARD: 1, SELECTION_DND: 2},
+    MaximizeFlags: {HORIZONTAL: 1, VERTICAL: 2, BOTH: 3},
     get SelectionSourceMemory() {
         return SelectionSourceMemory;
     },
@@ -584,11 +585,25 @@ export class Extension {
 export const Cairo = {...CairoMock, Operator: {CLEAR: 0, OVER: 1}};
 
 // A fake window for grab tests.
-export class FakeWindow {
+export class FakeWindow extends Obj {
     constructor(rect, mon = 0) {
+        super();
         this.rect = {...rect};
         this.mon = mon;
         this.alive = true;
+        this.maxFlags = 0;
+    }
+    // Move/resize like the app finally redrawing at its new size.
+    set(rect, maxFlags = this.maxFlags) {
+        const sized = rect.width !== this.rect.width || rect.height !== this.rect.height;
+        this.rect = {...rect};
+        this.maxFlags = maxFlags;
+        this.emit('position-changed');
+        if (sized)
+            this.emit('size-changed');
+    }
+    get_maximized() {
+        return this.maxFlags;
     }
     get_frame_rect() {
         return {...this.rect};

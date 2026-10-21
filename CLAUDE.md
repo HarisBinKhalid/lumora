@@ -16,8 +16,10 @@ Screen animations for GNOME on Ubuntu (Wayland). Five parts:
    a long git command gets both. Always on the primary monitor.
 3. **Desktop FX** (`extensions/desktop-fx@local/`): GNOME Shell extension.
    Cursor trail (comet / rainbow / sparkles / stars), click ripples (ripple /
-   shockwave / sparks / confetti), window slam (dust + shockwave when a
-   dragged window snaps or maximises), window crossing (light gate + glowing
+   shockwave / sparks / confetti), window snap (the `windowSlam` setting: a beam runs along the
+   WHOLE screen edge from the drop point, with sparks and a light shockwave
+   ring, when a dragged window snaps or maximises; no outline around the
+   window: the user removed it because it didn't match the window size), window crossing (light gate + glowing
    outline when a dragged window changes monitor), battery (a blinking
    nearly-empty battery + red edge pulse at the bottom of the primary monitor
    below `batteryLevel`% while discharging, and the same strip + battery in
@@ -45,7 +47,11 @@ Screen animations for GNOME on Ubuntu (Wayland). Five parts:
    `Window.__init__`. Tabs: Edge Portal, Terminal FX, Cursor / Windows /
    Desktop (Desktop FX) and Connections / Sound / Lock screen (System FX).
    Each of those tabs has its OWN on/off switch and flag file, so they work
-   independently; the user asked for that.
+   independently; the user asked for that. The app opens on a **Home** tab
+   (first in the sidebar): an "Enable all" / "Turn all off" button plus a
+   copy of every tab's "Animations on" switch (`HOME_TABS` in lumora.py;
+   add a row there for a new tab). `_flag_switched` keeps the Home switch and
+   the tab's switch in step; `_refresh_status` re-reads the flag files.
 
 Plus `shell/fx.sh`, the `fx` bash function users put in front of commands.
 It also has an optional "every command" hook (bash only: DEBUG trap +
@@ -185,9 +191,20 @@ Edit the source here and run `./install.sh`.
   BSSID = `wifi-switch` too, at most once per `ROAM_MS`. A new default
   sound device resets the volume baseline (no animation for the jump).
   VPN = NM types `vpn`, `wireguard`, `tun`.
-- Window slam is decided from geometry after the drop (`_snapSide`): the
-  window must have changed size and now fill a half / quarter / the whole
-  work area. Works with Ubuntu's tiling-assistant, which tiles on its own.
+- Window snap is decided after the drop (`_watchSnap` / `_snapResult`):
+  watch the window's `size-changed` / `position-changed` for up to 1.5s
+  (the tile lands only after the app redraws at the new size, which slow
+  apps take a while to do), then: it moved or resized, and now fills a half
+  / quarter / the whole work area (32px tolerance), or `get_maximized()`
+  says so. Uses the tiling assistant's `win.tiledRect` / `win.isTiled` when
+  set (Ubuntu turns GNOME's own edge-tiling off and lets it tile; terminals
+  resize in cell steps and stop short of the edges). A tiled window dragged
+  away is un-tiled by the tiling assistant, which ends the grab and starts a
+  new one; that's fine because each grab-op-begin starts fresh. The visual is
+  Cairo `snapEdge(len, origin)` placed on the work area's edge (full
+  length), clipped to the monitor. `place()` rotates the edge frame, which
+  runs "along the edge" backwards on the right and top edges, so the drop
+  point offset is negated there.
 
 ## Drawing conventions
 

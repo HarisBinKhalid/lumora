@@ -5,7 +5,7 @@
 import Cairo from 'cairo';
 import {
     TAU, WHITE, rand, pick, seg, easeOut, easeIn, easeInOut, lerp, mix,
-    glow, puff, disc, ring, glowStroke, roundRect,
+    glow, disc, ring, glowStroke, roundRect, arcPts,
 } from './draw.js';
 
 // ---------- Placing a drawing ----------
@@ -116,67 +116,68 @@ export function ripple(style, c) {
     });
 }
 
-// ---------- Window slam (designed for a 1080p screen) ----------
+// ---------- Window snapped to a screen edge (designed for a 1080p screen) ----------
 
-const DUST = [0.8, 0.76, 0.7];
-const IMPACT = [0.65, 0.82, 1];
+const SNAP = [0.45, 0.8, 1];
 
-// The window hit the screen edge along a stretch `len` long. Local frame:
-// the edge is the y axis, +x points into the screen.
-export function slam(len) {
+// A beam of light running along the whole screen edge the window snapped
+// to. Local frame: the edge is the y axis, +x points into the screen, `len`
+// is the edge's length. The light starts where the window was dropped
+// (`origin`, along the edge) and runs out to both ends, shedding sparks into
+// the screen, while a light shockwave ripples out from the drop point.
+export function snapEdge(len, origin = 0) {
     const L = Math.max(80, len), half = L / 2;
-    const n = Math.round(Math.max(8, Math.min(60, L / 28)));
-    const dust = Array.from({length: n}, () => ({
-        y: rand(-half, half), x: rand(40, 200), side: rand(-40, 40), r: rand(24, 52), d: rand(0, 0.18),
+    const o = Math.max(-half + 20, Math.min(half - 20, origin));
+    const sparks = Array.from({length: Math.round(Math.max(10, Math.min(40, L / 30)))}, () => ({
+        at: rand(0, 1), side: pick([-1, 1]), v: rand(30, 110), drift: rand(-20, 20), r: rand(1.2, 2.4),
     }));
-    // Soft flash spots along the edge (soft ends, unlike a rectangle).
-    const nSpots = Math.max(2, Math.round(L / 70));
-    const spots = Array.from({length: nSpots}, (_, i) => -half + 35 + (L - 70) * (i / (nSpots - 1)));
-    const chips = Array.from({length: Math.min(30, n + 8)}, () => ({
-        y: rand(-half, half), v: rand(80, 240), side: rand(-60, 60), s: rand(3, 6), rot: rand(0, TAU),
-    }));
-    const bulge = (y, amt) => amt * Math.cos((y / half) * Math.PI / 2);
-    const line = (x, amt) => Array.from({length: 25}, (_, i) => {
-        const y = -half + 20 + ((L - 40) * i) / 24;
-        return [x + bulge(y, amt), y];
-    });
+    // Where each front is (0 -> 1 of the way from the drop point to its end).
+    const front = t => easeOut(seg(t, 0.02, 0.42));
+    const posOf = (side, k) => lerp(o, side < 0 ? -half + 12 : half - 12, k);
     return {
-        duration: 1000, fwd: 300, back: 0, half: half + 80,
+        duration: 950, fwd: 190, back: 0, half: half + 40,
         draw(cr, t) {
-            // Flash right where the window hit.
-            const f = 1 - seg(t, 0, 0.35);
-            if (f > 0) {
-                for (const y of spots)
-                    glow(cr, 0, y, 95, IMPACT, 0.55 * f);
-                glowStroke(cr, [[2, -half + 20], [2, half - 20]], IMPACT, f, 4);
+            const k = front(t);
+            const fade = 1 - seg(t, 0.45, 1);
+            // Light shockwave: two thin half-rings rolling out from the drop point.
+            for (const [d, w] of [[0, 3], [0.1, 1.6]]) {
+                const sk = seg(t, d, d + 0.55);
+                if (sk > 0 && sk < 1) {
+                    const r = 12 + 160 * easeOut(sk);
+                    glowStroke(cr, arcPts(0, o, r, -Math.PI / 2, Math.PI / 2, 28), SNAP,
+                        0.7 * (1 - sk), w * (1 - sk * 0.6));
+                }
             }
-            // Two shockwaves rolling away from the edge.
-            for (const [d, w] of [[0, 3.4], [0.12, 2]]) {
-                const k = seg(t, d, d + 0.6);
-                if (k > 0 && k < 1)
-                    glowStroke(cr, line(8 + 230 * easeOut(k), 30 * k), IMPACT, 0.85 * (1 - k), w);
+            // Soft bloom inside the edge, stretched along it.
+            cr.save();
+            cr.translate(0, (posOf(-1, k) + posOf(1, k)) / 2);
+            const span = Math.max(20, (posOf(1, k) - posOf(-1, k)) / 2);
+            cr.scale(1, span / 120);
+            const g = new Cairo.RadialGradient(0, 0, 0, 0, 0, 120);
+            g.addColorStopRGBA(0, SNAP[0], SNAP[1], SNAP[2], 0.45 * fade);
+            g.addColorStopRGBA(1, SNAP[0], SNAP[1], SNAP[2], 0);
+            cr.setSource(g);
+            cr.rectangle(0, -120, 120, 240);
+            cr.fill();
+            cr.restore();
+            // The lit part of the edge grows out from the drop point.
+            glowStroke(cr, [[2, posOf(-1, k)], [2, posOf(1, k)]], SNAP, fade, 3.5);
+            // The two running fronts.
+            if (t < 0.5) {
+                for (const side of [-1, 1]) {
+                    const y = posOf(side, k);
+                    glow(cr, 4, y, 30, SNAP, 0.9 * (1 - seg(t, 0.35, 0.5)));
+                    disc(cr, 3, y, 3.5, WHITE, 1 - seg(t, 0.35, 0.5));
+                }
             }
-            // Dust billowing out.
-            for (const p of dust) {
-                const lk = seg(t, p.d, 1);
-                if (lk <= 0)
+            // Sparks shed into the screen as the fronts pass.
+            for (const p of sparks) {
+                const born = 0.02 + 0.4 * p.at;
+                const sk = seg(t, born, born + 0.4);
+                if (sk <= 0 || sk >= 1)
                     continue;
-                puff(cr, 8 + p.x * easeOut(lk), p.y + p.side * lk, p.r * (0.45 + lk),
-                    DUST, 0.62 * Math.sin(Math.PI * Math.pow(lk, 0.7)));
-            }
-            // Chips knocked loose.
-            for (const c of chips) {
-                const ck = seg(t, 0, 0.7);
-                if (ck >= 1)
-                    continue;
-                const x = 4 + c.v * easeOut(ck), y = c.y + c.side * ck;
-                cr.save();
-                cr.translate(x, y);
-                cr.rotate(c.rot + ck * 8);
-                cr.setSourceRGBA(0.9, 0.9, 0.95, 1 - ck);
-                cr.rectangle(-c.s / 2, -c.s / 2, c.s, c.s);
-                cr.fill();
-                cr.restore();
+                const y = posOf(p.side, p.at) + p.drift * sk;
+                disc(cr, 4 + p.v * easeOut(sk), y, p.r, mix(WHITE, SNAP, sk), 1 - sk);
             }
         },
     };
@@ -466,7 +467,7 @@ const at = (p, x, y, delay = 0) => ({...p, x: x - p.ox, y: y - p.oy, delay});
 
 export const PREVIEWS = {
     ripples: () => RIPPLE_STYLES.map((s, i) => at(ripple(s, [0.35, 0.7, 1]), 300 + i * 420, 400)),
-    slam: (W, H) => [at(place(slam(700), [1, 0]), 0, H / 2), at(place(slam(1200), [0, 1]), W / 2, 0, 0)],
+    slam: (W, H) => [at(place(snapEdge(H, -150), [1, 0]), 0, H / 2), at(place(snapEdge(W, -500), [0, 1]), W / 2, 0, 0)],
     cross: (W, H) => [
         at(place(crossExit(520), [1, 0]), W / 2 - 1, H / 2),
         at(place(crossEntry(520), [1, 0]), W / 2, H / 2),

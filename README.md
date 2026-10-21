@@ -25,7 +25,8 @@ Screen animations for GNOME:
     ./install.sh
 
 The app opens and tells you if you need to log out once.
-Effects switch off at every restart; turn them on in the Lumora app.
+Effects switch off at every restart; turn them back on from the app's Home
+page (**Enable all**, or one switch per group).
 
 ## Use
 
