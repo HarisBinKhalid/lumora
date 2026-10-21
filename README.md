@@ -36,3 +36,16 @@ Effects switch off at every restart; turn them on in the Lumora app.
 
 Or pick **Animate → Every command** under Terminal FX in the app, and every
 command you run in bash gets an animation, no `fx` needed.
+
+## Requirements and known limits
+
+- GNOME 45–50 on Wayland (made on Ubuntu 24.04, GNOME 46).
+- **Paste (Ctrl+V) has no animation.** GNOME doesn't tell extensions which
+  keys you press, so the clipboard animations follow the clipboard itself:
+  copying and cutting text look the same ("Copied"), files cut in the Files
+  app get their own "Files cut" animation, and pasting can't be seen.
+  GNOME 48+ (Ubuntu 26.04) may make a paste animation possible; not yet
+  checked.
+- The typing combo counts key presses, never which keys, and can count
+  mouse-wheel scrolling as typing.
+- "Every command" in Terminal FX works in bash only.

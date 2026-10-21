@@ -124,7 +124,8 @@ Edit the source here and run `./install.sh`.
 - App (`lumora.py`) changes apply when the app is reopened. `fx.sh` changes
   apply in new terminals.
 - Target GNOME 45-50 (ESM modules: `import X from 'gi://X'`). Ubuntu 24.04 =
-  GNOME 46, GTK 4.14, libadwaita 1.5. Keep the app working on libadwaita 1.5.
+  GNOME 46, GTK 4.14, libadwaita 1.5 (what the user runs now); Ubuntu 26.04 =
+  GNOME 50. Keep the app working on libadwaita 1.5.
 - Extensions must be click-through and safe: overlays are `reactive: false`,
   every timer/actor/listener is cleaned up in `disable()`, errors are caught
   and logged rather than thrown in loops.
@@ -159,6 +160,24 @@ Edit the source here and run `./install.sh`.
   Memory sources (GNOME keeping the clipboard after an app quits, or the
   shell/extensions setting it) are ignored. Paste is NOT detectable; the
   user chose this over taking over the clipboard.
+- **Paste (Ctrl+V), options discussed with the user (2026-10-21), none
+  built yet:** (1) a helper outside GNOME reading `/dev/input` with
+  python3-evdev (exact Ctrl+C/X/V, but the user must join the `input` group,
+  which lets any of their programs read all keystrokes); (2) Lumora becoming
+  the clipboard owner (a JS `Meta.SelectionSource` serving a stored copy, so
+  each paste calls our `read_async`): no extra permissions, but risky for
+  big/rich content, apps reading the clipboard without pasting cause false
+  hits, and it can't be verified offline; (3) GNOME 48+ added an a11y
+  keyboard monitor (`org.freedesktop.a11y.KeyboardMonitor`), possibly
+  restricted to screen readers. Rejected: "Ctrl held + clipboard unchanged"
+  (fires on Ctrl+S/Z/A). The user is considering upgrading.
+- **Planned upgrade:** the laptop is offered Ubuntu 26.04.1 LTS (GNOME 50).
+  After the user upgrades: re-extract GNOME's shell JS (read-only:
+  `gresource extract /usr/lib/gnome-shell/libshell-*.so ...`), check the
+  APIs Lumora relies on (grab-op signals, idle monitor, `Meta.Selection`,
+  unredirect, `St.BoxLayout` `vertical`, screenShield, volume.js
+  `getMixerControl`, GnomeBluetooth 3.0, NM), see whether the keyboard
+  monitor is usable from an extension, then let the user test.
 - **System FX events:** ignore what devices report for `SETTLE_MS` after
   starting to watch (no burst at login). Wi-Fi off waits `SWITCH_WAIT_MS`
   (longer while another Wi-Fi connection is ACTIVATING): if a different
