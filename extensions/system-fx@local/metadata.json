@@ -4,5 +4,5 @@
   "description": "Animations for Wi-Fi, Bluetooth and VPN connecting or disconnecting, volume and microphone changes, and locking or unlocking the screen.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "session-modes": ["user", "unlock-dialog"],
-  "version": 2
+  "version": 4
 }

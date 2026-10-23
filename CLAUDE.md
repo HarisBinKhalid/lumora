@@ -40,6 +40,13 @@ Screen animations for GNOME on Ubuntu (Wayland). Five parts:
    `Main.screenShield` `locked-changed`. Its metadata has
    `"session-modes": ["user", "unlock-dialog"]` so it keeps running on the
    lock screen; the other extensions are disabled there by GNOME as usual.
+   Lock = an imploding double shockwave timed to land exactly as the shackle
+   clicks shut (`CLICK` in scenes.js); unlock = an exploding double
+   shockwave from the moment the shackle starts to open (`POP`; it's fully
+   open at `OPEN`). The rings reach ~305 design units (box radius 340). Every System FX
+   animation is also removed by a wall-clock timer (duration + 300ms):
+   Clutter timelines stop while the screen is dark (common right after
+   locking), which used to leave the padlock frozen until unlock.
 5. **Lumora app** (`app/lumora.py`): GTK4 + libadwaita (Python/PyGObject)
    settings window for all three extensions. Tabs are a scrollable sidebar
    (`Adw.NavigationSplitView`, collapses below ~560sp), not a header-bar

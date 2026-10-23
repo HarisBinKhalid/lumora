@@ -689,9 +689,20 @@ if (which === 'system') {
     advance(300);
     check(findAll(a => a.text).length === 0, 'locked: device names are not shown');
     advance(2500);
+    advance(2500);
+    // Locked, and the screen goes dark straight away: no frames are drawn.
+    shield.locked = false; mock.Main.sessionMode.isLocked = false; shield.emit('locked-changed');
+    advance(2500);
+    shield.locked = true; mock.Main.sessionMode.isLocked = true; shield.emit('locked-changed');
+    advance(100);
+    mock.frames.frozen = true;
+    advance(3000);
+    check(playing().length === 0, 'screen dark right after locking: the padlock does not stay frozen there');
+    mock.frames.frozen = false;
+    advance(500);
     shield.locked = false; mock.Main.sessionMode.isLocked = false; shield.emit('locked-changed');
     advance(300);
-    check(playing().length === 1, 'unlock');
+    check(playing().length === 1, 'unlock: only the unlock animation (no leftover padlock)');
     advance(2500);
     noErrors('lock');
 

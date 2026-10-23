@@ -31,13 +31,18 @@ export function advance(ms, step = 16) {
             else
                 sources.delete(id);
         }
-        for (const tl of [...timelines])
-            tl._frame();
+        if (!frames.frozen)
+            for (const tl of [...timelines])
+                tl._frame();
         repaintAll();
     }
 }
 
 export const pendingSources = () => sources.size;
+
+// frozen = the screen is off: no frames are drawn, so timelines don't move
+// (timers still run).
+export const frames = {frozen: false};
 
 // ---------- Signals ----------
 

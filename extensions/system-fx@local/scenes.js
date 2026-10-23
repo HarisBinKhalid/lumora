@@ -487,43 +487,67 @@ export function micUnmute() {
 
 // ---------- Lock screen ----------
 
+// The shackle clicks shut at CLICK (fraction of the scene); the imploding
+// shockwave is timed to arrive at the padlock at exactly that moment.
+const CLICK = 0.42;
+
 export function lock() {
-    const parts = Array.from({length: 30}, () => ({a: rand(0, TAU), d: rand(120, 210), s: rand(1.5, 3)}));
-    return centred(1600, 230, (cr, t) => {
+    const parts = Array.from({length: 30}, () => ({a: rand(0, TAU), d: rand(120, 200), s: rand(1.5, 3)}));
+    return centred(1600, 340, (cr, t) => {
         const a = life(t, 0.06, 0.8);
         // Light gathers in...
         const g = seg(t, 0, 0.35);
         if (g < 1) {
             for (const p of parts) {
                 const d = p.d * (1 - easeIn(g));
-                disc(cr, Math.cos(p.a) * d, Math.sin(p.a) * d, p.s, LOCK, a * Math.sin(Math.PI * g));
+                disc(cr, Math.cos(p.a) * d, Math.sin(p.a) * d, p.s, LOCK, 0.7 * a * Math.sin(Math.PI * g));
             }
         }
-        // ...the shackle drops and clicks shut.
-        const drop = easeIn(seg(t, 0.2, 0.42));
+        // ...an imploding shockwave pulls in to the padlock, two rings that
+        // both land as the shackle clicks shut...
+        for (const start of [0.04, 0.16]) {
+            const k = seg(t, start, CLICK);
+            if (k > 0 && k < 1) {
+                const r = lerp(305, 78, easeIn(k));
+                glowStroke(cr, arcPts(0, 8, r, 0, TAU, 64), LOCK, a * (0.25 + 0.75 * k), 2.5 + 4 * k);
+            }
+        }
+        // ...and the shackle drops and clicks shut.
+        const drop = easeIn(seg(t, 0.2, CLICK));
         padlock(cr, 0, 0, 2.4, LOCK, a, 1 - drop);
-        const hit = seg(t, 0.42, 0.8);
+        const hit = seg(t, CLICK, 0.7);
         if (hit > 0 && hit < 1) {
-            ring(cr, 0, 10, 70 + 120 * easeOut(hit), 6 * (1 - hit), LOCK, a * (1 - hit));
-            glow(cr, 0, 10, 160, LOCK, 0.45 * a * (1 - hit));
+            glow(cr, 0, 10, 130, LOCK, 0.5 * a * (1 - hit));
             disc(cr, 0, 29, 12 * (1 - hit), WHITE, a * (1 - hit));
         }
     });
 }
 
+// The shackle springs open between POP and OPEN; the exploding shockwave
+// starts the moment it begins to open (POP).
+const OPEN = 0.4;
+const POP = 0.15;   // the shackle starts popping open here
+
 export function unlock() {
     const rays = Array.from({length: 16}, (_, i) => (i / 16) * TAU + rand(-0.08, 0.08));
-    const sparks = Array.from({length: 26}, () => ({a: rand(0, TAU), v: rand(90, 200), s: rand(1.5, 3)}));
-    return centred(1700, 230, (cr, t) => {
+    const sparks = Array.from({length: 26}, () => ({a: rand(0, TAU), v: rand(90, 150), s: rand(1.5, 3)}));
+    return centred(1700, 340, (cr, t) => {
         const a = life(t, 0.05, 0.75);
-        const pop = easeOut(seg(t, 0.15, 0.4));
-        const rise = easeIn(seg(t, 0.55, 1));
+        const pop = easeOut(seg(t, POP, OPEN));
+        const rise = easeIn(seg(t, 0.6, 1));
         padlock(cr, 0, -40 * rise, 2.4, mix(LOCK, GOLD, pop), a, pop, pop);
-        const b = seg(t, 0.3, 0.75);
+        // Exploding shockwave: two rings bursting out of the padlock.
+        for (const start of [POP, POP + 0.08]) {
+            const k = seg(t, start, start + 0.4);
+            if (k > 0 && k < 1)
+                glowStroke(cr, arcPts(0, 8, lerp(78, 305, easeOut(k)), 0, TAU, 64), GOLD,
+                    a * (1 - k), 6.5 * (1 - k) + 1);
+        }
+        const b = seg(t, POP, 0.7);
         if (b > 0 && b < 1) {
             glow(cr, 0, 0, 180, GOLD, 0.45 * a * (1 - b));
             for (const r of rays) {
-                const d1 = 70 + 130 * easeOut(b), d0 = d1 - 50 * (1 - b);
+                const d1 = 70 + 120 * easeOut(b), d0 = d1 - 50 * (1 - b);
                 glowStroke(cr, [[Math.cos(r) * d0, Math.sin(r) * d0], [Math.cos(r) * d1, Math.sin(r) * d1]],
                     GOLD, a * (1 - b), 2.2);
             }

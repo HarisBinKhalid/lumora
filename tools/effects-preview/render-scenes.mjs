@@ -107,6 +107,6 @@ const sysFile = path.join(ext, 'system-fx@local/scenes.js');
 if (fs.existsSync(sysFile)) {
     const sys = await load(sysFile);
     for (const [name, make] of Object.entries(sys.PREVIEWS ?? {}))
-        sheet(name, make, [W, H], '#3a3f4b', [W / 2 - 300, H / 2 - 170, 600, 340], Number(process.env.SHOT) || 0.6);
+        sheet(name, make, [W, H], '#3a3f4b', [W / 2 - 360, H / 2 - 350, 720, 700], Number(process.env.SHOT) || 0.6);
 }
 fs.rmSync(tmp, {recursive: true, force: true});

@@ -310,6 +310,16 @@ export default class SystemFxExtension extends Extension {
         });
         area.queue_repaint();
         tl.start();
+        // Animations only advance while the screen draws frames. Right after
+        // locking, the screen often goes dark and stops drawing, which would
+        // leave the padlock frozen there until you come back to unlock. A
+        // normal clock timer removes it on time either way.
+        this._later(spec.duration + 300, () => {
+            if (!this._actors.has(root))
+                return;
+            this._remove(root);
+            onDone?.();
+        });
         return root;
     }
 
