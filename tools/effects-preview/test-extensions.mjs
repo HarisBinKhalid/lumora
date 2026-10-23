@@ -434,11 +434,140 @@ if (which === 'desktop') {
     advance(300);
     noErrors('clipboard');
 
+    // --- smooth trail: drawn in step with screen frames, only while needed ---
+    config({desktop: {trailStyle: 'comet', ripples: false, combo: false, scrollCombo: false}});
+    advance(1500);
+    check(mock.runningTimelines() === 0, 'mouse resting: no frame timeline running');
+    for (let i = 0; i < 20; i++) {
+        pointer.x = 500 + i * 13.5; pointer.y = 500 + i * 3;
+        advance(16);
+    }
+    check(mock.runningTimelines() === 1, 'mouse moving: one frame timeline drives the trail');
+    const subpixel = findAll(a => a.opacity > 0 && a.width > 0 && a.width < 20 && !Number.isInteger(a.x));
+    check(subpixel.length > 0, 'trail dots sit at sub-pixel positions (no rounding jitter)');
+    advance(1500);
+    check(mock.runningTimelines() === 0 && findAll(a => a.opacity > 0 && a.width < 20 && a.width > 0).length === 0,
+        'mouse stops: trail fades, frames stop');
+    for (const style of ['neon', 'fire', 'bubbles', 'snow', 'hearts', 'pixels']) {
+        config({desktop: {trailStyle: style, ripples: false, combo: false, scrollCombo: false}});
+        advance(300);
+        for (let i = 0; i <= 30; i++) {
+            pointer.x = 400 + i * 20; pointer.y = 500 + Math.sin(i / 4) * 80;
+            advance(16);
+        }
+        const vis = findAll(a => a.opacity > 0 && (a.text || (a.width > 0 && a.width < 30)));
+        check(vis.length > 5, `${style} trail: ${vis.length} pieces visible`);
+        shot(`trail-${style}`, 300, 350, 900, 300, 1);
+        advance(1800);
+    }
+    // Neon takes its colour from the settings, and a change applies at once.
+    const neonGlows = () => findAll(a => /box-shadow/.test(a.style) && a.width > 0 && a.width < 30)
+        .map(a => /rgba\(([^)]*), 0\.85\)/.exec(a.style)?.[1]);
+    const moveAbout = () => {
+        for (let i = 0; i <= 20; i++) {
+            pointer.x = 400 + i * 20; pointer.y = 500;
+            advance(16);
+        }
+    };
+    config({desktop: {trailStyle: 'neon', trailColor: '0, 255, 0', ripples: false, combo: false, scrollCombo: false}});
+    advance(300);
+    moveAbout();
+    check(neonGlows().length > 0 && neonGlows().every(c => c === '0, 255, 0'), 'neon trail uses the chosen colour (green)');
+    config({desktop: {trailStyle: 'neon', trailColor: '255, 140, 0', ripples: false, combo: false, scrollCombo: false}});
+    advance(300);
+    moveAbout();
+    check(neonGlows().every(c => c === '255, 140, 0'), 'changing the colour applies straight away (orange)');
+    config({desktop: {trailStyle: 'neon', trailColor: 'red; background: url(x)', ripples: false, combo: false, scrollCombo: false}});
+    advance(300);
+    moveAbout();
+    check(neonGlows().every(c => c === '255, 60, 220'), 'a broken colour setting falls back to the default pink');
+    advance(1500);
+    config({});
+    advance(300);
+    noErrors('new trails');
+
+    // --- hit marker click ---
+    config({desktop: {rippleStyle: 'hitmarker', trail: false, scrollCombo: false}});
+    advance(300);
+    pointer.x = 800; pointer.y = 400; pointer.mods = 256; inputEvent(); advance(40);
+    pointer.mods = 0; inputEvent(); advance(60);
+    check(findAll(a => a._canvas).length === 1, 'hit marker: drawn on click');
+    shot('ripple-hitmarker', 750, 350, 100, 100, 3);
+    advance(800);
+    noErrors('hit marker');
+
+    // --- scroll combo ---
+    config({desktop: {trail: false, ripples: false, combo: true, scrollCombo: true, scrollSide: 'right'}});
+    advance(1300);
+    pointer.x = 2500; pointer.y = 500;                 // on the right-hand monitor
+    inputEvent();                                      // the mouse's last motion event
+    mock.useDevice(mock.Clutter.InputDeviceType.POINTER_DEVICE);
+    const meter = () => findAll(a => /rgba\(20, 22, 28, 0.55\)/.test(a.style))[0];
+    const scrollFor = ms => {
+        for (let t = 0; t < ms; t += 50) {
+            inputEvent(); advance(50);
+        }
+    };
+    scrollFor(1000);
+    const m1 = meter();
+    check(m1 && m1.x > 1920 + 1800 && m1.x < 3840, `scrolling: a meter appears at the right of the monitor you're on (x=${m1?.x})`);
+    const fill1 = m1?.children[0]?.height ?? 0;
+    check(findAll(a => a.text === 'COMBO').length === 0, 'scrolling does not count as typing');
+    scrollFor(1000);
+    const fill2 = meter()?.children[0]?.height ?? 0;
+    check(fill2 > fill1 && fill1 > 0, `meter keeps filling while you scroll (${fill1} -> ${fill2})`);
+    shot('scroll-meter-half', 3500, 100, 340, 880, 0.6);
+    const midStyle = meter()?.children[0]?.style ?? '';
+    scrollFor(2500);
+    const full = meter();
+    check(full.children[0].height >= full.height - 1, 'about 3.5s of scrolling fills it');
+    check(/255, 60, 50/.test(full.style) && (full.translation_x !== 0 || full.translation_y !== 0),
+        'full and still scrolling: red glow + shake');
+    check(midStyle !== full.children[0].style, 'the colour changes as it fills (green -> red)');
+    shot('scroll-meter-full', 3500, 100, 340, 880, 0.6);
+    advance(600);
+    check(meter() && meter().translation_x === 0, 'scrolling stops: shaking stops');
+    advance(3000);
+    check(!meter() && mock.runningTimelines() === 0, 'then it drains, disappears, and frames stop');
+    // Typing again: the keyboard is the last device, so these are keys.
+    mock.useDevice(mock.Clutter.InputDeviceType.KEYBOARD_DEVICE);
+    for (let k = 0; k < 15; k++) {
+        inputEvent(); advance(50); inputEvent(); advance(50);
+    }
+    check(findAll(a => a.text === 'COMBO').length === 1 && !meter(), 'keyboard: typing combo, no scroll meter');
+    advance(2500);
+    // Touchpad scrolling counts too, and the left side works.
+    config({desktop: {trail: false, ripples: false, scrollSide: 'left'}});
+    advance(300);
+    pointer.x = 300; pointer.y = 300; inputEvent();
+    mock.useDevice(mock.Clutter.InputDeviceType.TOUCHPAD_DEVICE);
+    scrollFor(600);
+    const left = meter();
+    check(left && left.x < 100, `touchpad scroll: meter on the left (x=${left?.x})`);
+    advance(4000);
+    check(!meter(), 'left meter drains away');
+    config({desktop: {trail: false, ripples: false, scrollCombo: false}});
+    advance(300);
+    mock.useDevice(mock.Clutter.InputDeviceType.POINTER_DEVICE);
+    scrollFor(800);
+    check(!meter(), 'scroll combo switched off: no meter');
+    config({});
+    advance(300);
+    noErrors('scroll combo');
+
     // --- previews from the app, with the switch OFF ---
+    config({desktop: {combo: false, scrollCombo: false}});
+    advance(300);
+    ext._onPreview('combo');
+    advance(1500);
+    check(findAll(a => a.text === 'COMBO').length === 1, 'combo preview works even with the combo switched off');
+    advance(5000);
+    config({});
+    advance(300);
     allOff();
     advance(1100);
     check(mock.idleWatchCount() === 0 && display.handlerCount() === 0, 'switch off again: input watching removed');
-    for (const p of ['trail comet', 'trail rainbow', 'trail sparkles', 'trail stars', 'ripple shockwave', 'slam', 'cross', 'lowbattery', 'charged', 'copy', 'cut', 'combo']) {
+    for (const p of ['trail comet', 'trail neon', 'trail fire', 'trail pixels', 'ripple hitmarker', 'scroll', 'slam', 'cross', 'lowbattery', 'charged', 'copy', 'cut', 'combo']) {
         ext._onPreview(p);
         advance(400);
         const n = stage().length;

@@ -10,7 +10,9 @@ Screen animations for GNOME:
   `git push` launches a rocket (that crashes if the push fails), `git pull`
   lands one, `git commit` and `git merge` get their own animations, and
   commands that ran over a minute get fireworks (a grand finale after five).
-- **Desktop FX**: a cursor trail, click ripples, a dust-and-shockwave slam
+- **Desktop FX**: cursor trails (comet, rainbow, neon, sparkles, stars, fire,
+  bubbles, snow, hearts, pixels), click effects (ripple, shockwave, sparks,
+  confetti, hit marker), a scroll combo meter, a light beam
   when you snap a window to a screen edge, a gate of light when you drag a
   window onto another monitor, a low battery warning, a "charged" animation,
   copy / cut animations and an arcade typing combo counter.

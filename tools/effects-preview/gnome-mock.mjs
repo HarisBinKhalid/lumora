@@ -177,12 +177,14 @@ const timelines = new Set();
 
 export const Clutter = {
     ModifierType: {BUTTON1_MASK: 256, BUTTON2_MASK: 512, BUTTON3_MASK: 1024},
+    InputDeviceType: {POINTER_DEVICE: 0, KEYBOARD_DEVICE: 1, TOUCHPAD_DEVICE: 3},
     AnimationMode: new Proxy({}, {get: (_t, k) => k}),
     ActorAlign: {CENTER: 'center', START: 'start', END: 'end'},
     Timeline: class extends Obj {
-        constructor({duration}) {
+        constructor({duration, repeat_count = 0}) {
             super();
             this.duration = duration;
+            this.repeat = repeat_count;     // -1 = loop forever
             this.elapsed = 0;
         }
         start() {
@@ -200,9 +202,11 @@ export const Clutter = {
             return Math.min(1, this.elapsed / this.duration);
         }
         _frame() {
+            if (this.repeat === -1 && clock.ms - this._started >= this.duration)
+                this._started += this.duration * Math.floor((clock.ms - this._started) / this.duration);
             this.elapsed = Math.min(this.duration, clock.ms - this._started);
             this.emit('new-frame', this.elapsed);
-            if (this.elapsed >= this.duration) {
+            if (this.repeat !== -1 && this.elapsed >= this.duration) {
                 timelines.delete(this);
                 this.emit('completed');
             }
@@ -558,7 +562,7 @@ const idleWatches = new Map();
 export const display = new Obj();
 export const globalObj = {
     get_pointer: () => [pointer.x, pointer.y, pointer.mods],
-    backend: {
+    backend: Object.assign(new Obj(), {
         get_core_idle_monitor: () => ({
             add_idle_watch(ms, cb) {
                 const id = nextId++;
@@ -570,7 +574,7 @@ export const globalObj = {
                     errors.push(`remove_watch(${id}): unknown watch`);
             },
         }),
-    },
+    }),
     display: Object.assign(display, {get_selection: () => selection}),
     stage: {width: 3840, height: 2160},
 };
@@ -580,6 +584,10 @@ export function inputEvent() {
         cb();
 }
 export const idleWatchCount = () => idleWatches.size;
+// The user switched to another kind of input device (GNOME's last-device-changed).
+export function useDevice(type) {
+    globalObj.backend.emit('last-device-changed', {device_type: type});
+}
 
 export class Extension {
     constructor(metadata) {

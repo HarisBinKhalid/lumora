@@ -15,8 +15,15 @@ Screen animations for GNOME on Ubuntu (Wayland). Five parts:
    (tier 1), ≥ `epicMinutes` a bigger show + gold finale + confetti (tier 2);
    a long git command gets both. Always on the primary monitor.
 3. **Desktop FX** (`extensions/desktop-fx@local/`): GNOME Shell extension.
-   Cursor trail (comet / rainbow / sparkles / stars), click ripples (ripple /
-   shockwave / sparks / confetti), window snap (the `windowSlam` setting: a beam runs along the
+   Cursor trail (ribbons: comet / rainbow / neon (colour from the
+   `trailColor` setting; the app shows that colour row only for neon);
+   particles: sparkles /
+   stars / fire / bubbles / snow / hearts / pixels — `RIBBONS` and
+   `PARTICLES` tables in extension.js), click ripples (ripple / shockwave /
+   sparks / confetti / hitmarker), scroll combo (a meter on the left or
+   right of the monitor under the pointer fills green -> yellow -> orange
+   -> red over ~3.5s of continuous scrolling; full + still scrolling = light
+   red glow + shake; drains when you stop), window snap (the `windowSlam` setting: a beam runs along the
    WHOLE screen edge from the drop point, with sparks and a light shockwave
    ring, when a dragged window snaps or maximises; no outline around the
    window: the user removed it because it didn't match the window size), window crossing (light gate + glowing
@@ -102,7 +109,7 @@ Edit the source here and run `./install.sh`.
   the same JS type.
 - **On/off switches:** files in `$XDG_RUNTIME_DIR`: `edge-portal-on`,
   `term-fx-on`, and for Desktop FX one per tab: `desktop-fx-cursor-on`
-  (trail, ripples), `desktop-fx-windows-on` (slam, crossing),
+  (trail, ripples, scroll combo), `desktop-fx-windows-on` (slam, crossing),
   `desktop-fx-desktop-on` (battery, clipboard, combo), and for System FX:
   `system-fx-connections-on`, `system-fx-sound-on`, `system-fx-lock-on`.
   `/run/user/<id>` is wiped at reboot, so effects are always OFF after a
@@ -118,8 +125,8 @@ Edit the source here and run `./install.sh`.
     previews git scenes as `preview-success 0 d=0 git push`).
   - 47322: Edge Portal previews from the app: `preview <effect-name>`.
   - 47323: Desktop FX previews from the app: `trail <style>`,
-    `ripple <style>`, `slam`, `cross`, `lowbattery`, `charged`, `copy`,
-    `cut`, `combo`.
+    `ripple <style>`, `scroll`, `slam`, `cross`, `lowbattery`, `charged`,
+    `copy`, `cut`, `combo`.
   - 47324: System FX previews: `preview <name>` (names = keys of `SCENES`
     in its scenes.js, e.g. `wifi-switch`, `vol-max`, `unlock`).
   Over SSH (Termius), users forward remote port 47321 to the laptop.
@@ -150,7 +157,7 @@ Edit the source here and run `./install.sh`.
   a resting cursor trail doesn't count). `actor.ease()` does this by itself,
   but Cairo timelines and per-tick updates don't. Keep the hold balanced.
 - Never put unvalidated config values into CSS strings (see `_barrierColor`,
-  `_rippleRgb`). CSS colours come from fixed lists in the code.
+  `_rgbSetting`). CSS colours come from fixed lists in the code.
 - The user has multiple monitors, including one placed ABOVE the primary.
   Terminal FX draws inside a layer clipped to the primary monitor for this
   reason; Desktop FX clips slams and crossing gates to their monitor
@@ -166,6 +173,10 @@ Edit the source here and run `./install.sh`.
   release each count, so keys = events / 2). Clicks = a new bit in the button
   mask, checked from both the idle watch and the 16ms pointer ticker. The
   combo never sees which key, and is off while the screen is locked.
+  Key vs scroll: both look the same to the idle watch, so Desktop FX also
+  listens to `global.backend` `last-device-changed` (as GNOME's on-screen
+  keyboard does) and sorts the events ~25ms later: last device a pointer or
+  touchpad = scroll (scroll combo), else a key (typing combo).
 - **Clipboard:** keys can't be seen (above), so Desktop FX follows
   `global.display.get_selection()` `owner-changed` for the CLIPBOARD:
   any new owner = "copied" (copy and cut of text look the same); files with
@@ -242,7 +253,12 @@ cursor size × size setting); slam / gate / battery for a 1080p screen. The
 low battery warning is the one long-running canvas: it redraws at ~30fps and draws
 only a few shapes and ONE gradient per frame to stay cheap. The cursor trail is
 not Cairo: it's a fixed pool of St widgets moved every tick (no actors
-created per frame), and it skips all work while the mouse rests.
+created per frame). It's driven by a looping `Clutter.Timeline` on an
+invisible stage-sized actor (`_wantFrames` / frame driver), so it updates in
+step with screen redraws, at sub-pixel positions; the 16ms GLib ticker only
+notices motion and wakes the frame driver, which stops (and removes its
+actor) when nothing needs frames, because a running timeline keeps the
+screen redrawing. The scroll meter uses the same frame driver.
 
 ## Testing
 

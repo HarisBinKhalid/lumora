@@ -44,9 +44,12 @@ GIT_EFFECTS = [
     ("commit", "git commit", "A stamp slams down: a tick, or a cracked cross"),
     ("merge", "git merge / rebase", "Two branches join — or spark and pull apart"),
 ]
-TRAIL_STYLES = [("comet", "Comet"), ("rainbow", "Rainbow"), ("sparkles", "Sparkles"), ("stars", "Stars")]
+TRAIL_STYLES = [("comet", "Comet"), ("rainbow", "Rainbow"), ("neon", "Neon"), ("sparkles", "Sparkles"),
+                ("stars", "Stars"), ("fire", "Fire"), ("bubbles", "Bubbles"), ("snow", "Snow"),
+                ("hearts", "Hearts"), ("pixels", "Pixels")]
 RIPPLE_STYLES = [("ripple", "Water ripple"), ("shockwave", "Shockwave"), ("sparks", "Sparks"),
-                 ("confetti", "Confetti pop")]
+                 ("confetti", "Confetti pop"), ("hitmarker", "Hit marker")]
+SIDES = [("right", "Right"), ("left", "Left")]
 CONNECTION_FX = [
     ("wifi-on", "Wi-Fi connects", "The Wi-Fi signal lights up and sends out a wave"),
     ("wifi-off", "Wi-Fi disconnects", "The signal bars die out and crumble"),
@@ -81,7 +84,7 @@ HOME_TABS = [
      "Moving the mouse between monitors"),
     ("term-fx-on", "terminal", "Terminal FX", "utilities-terminal-symbolic",
      "Commands finishing in the terminal"),
-    ("desktop-fx-cursor-on", "cursor", "Cursor", "input-mouse-symbolic", "Cursor trail and click ripples"),
+    ("desktop-fx-cursor-on", "cursor", "Cursor", "input-mouse-symbolic", "Trail, click ripples and scroll combo"),
     ("desktop-fx-windows-on", "windows", "Windows", "focus-windows-symbolic", "Snapping and moving windows"),
     ("desktop-fx-desktop-on", "desktop", "Desktop", "battery-caution-symbolic",
      "Battery, clipboard and typing combo"),
@@ -124,6 +127,7 @@ DEFAULTS = {
         "ripples": True,
         "rippleStyle": "ripple",
         "rippleColor": "80, 170, 255",
+        "trailColor": "255, 60, 220",
         "rippleSize": 1.0,
         "windowSlam": True,
         "windowCross": True,
@@ -133,6 +137,8 @@ DEFAULTS = {
         "combo": True,
         "comboMin": 10,
         "comboCorner": "bottom-right",
+        "scrollCombo": True,
+        "scrollSide": "right",
         "batteryFull": True,
         "batteryFullLevel": 100,
         "clipboard": [e[0] for e in CLIPBOARD_FX],
@@ -702,7 +708,7 @@ class Window(Adw.ApplicationWindow):
     def _cursor_page(self):
         c = self.cfg["desktop"]
         page = Adw.PreferencesPage()
-        page.add(self._desk_status(CURSOR_FLAG, "Cursor trail and click ripples"))
+        page.add(self._desk_status(CURSOR_FLAG, "Cursor trail, click ripples and the scroll combo"))
 
         group = Adw.PreferencesGroup(title="Cursor trail",
                                      description="Follows the mouse whenever animations are on.")
@@ -710,9 +716,24 @@ class Window(Adw.ApplicationWindow):
         trail.add_suffix(self._preview_button(
             lambda: self._preview_desk(f"trail {self.cfg['desktop']['trailStyle']}")))
         group.add(trail)
+        # Colour: only the neon trail uses it, so it only shows for neon.
+        trail_color = Adw.ActionRow(title="Colour", subtitle="Colour of the neon trail",
+                                    visible=c["trailStyle"] == "neon")
+        trail_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False),
+                                          valign=Gtk.Align.CENTER)
+        rgba = Gdk.RGBA()
+        rgba.parse(f"rgb({c['trailColor']})")
+        trail_btn.set_rgba(rgba)
+        trail_btn.connect("notify::rgba", lambda b, _p: self._set("desktop", "trailColor", rgb_text(b)))
+        trail_color.add_suffix(trail_btn)
+
+        def style_changed(v):
+            self._set("desktop", "trailStyle", v)
+            trail_color.set_visible(v == "neon")
+
         rows = [
-            self._combo("Style", None, TRAIL_STYLES, c["trailStyle"],
-                        lambda v: self._set("desktop", "trailStyle", v)),
+            self._combo("Style", None, TRAIL_STYLES, c["trailStyle"], style_changed),
+            trail_color,
             self._spin("Size", "Compared to your mouse cursor", c["trailSize"], 0.5, 3, 0.1, 1,
                        lambda v: self._set("desktop", "trailSize", round(v, 1))),
         ]
@@ -745,6 +766,20 @@ class Window(Adw.ApplicationWindow):
         for row in rows:
             ripples.bind_property("active", row, "sensitive", GObjectBindSync)
             group.add(row)
+        page.add(group)
+
+        group = Adw.PreferencesGroup(
+            title="Scroll combo",
+            description="Keep scrolling and a meter fills up at the side of the screen, from green "
+                        "through yellow and orange to red. Full and still scrolling, it glows red and shakes.")
+        scroll = self._switch("Scroll meter", None, c["scrollCombo"],
+                              lambda on: self._set("desktop", "scrollCombo", on))
+        scroll.add_suffix(self._preview_button(lambda: self._preview_desk("scroll")))
+        group.add(scroll)
+        side = self._combo("Side", None, SIDES, c["scrollSide"],
+                           lambda v: self._set("desktop", "scrollSide", v))
+        scroll.bind_property("active", side, "sensitive", GObjectBindSync)
+        group.add(side)
         page.add(group)
         return page
 

@@ -49,9 +49,31 @@ function centred(duration, r, draw) {
 
 const CONFETTI = [[1, 0.3, 0.42], [1, 0.82, 0.25], [0.24, 0.86, 0.6], [0.3, 0.78, 0.95], [0.7, 0.53, 1]];
 
-export const RIPPLE_STYLES = ['ripple', 'shockwave', 'sparks', 'confetti'];
+export const RIPPLE_STYLES = ['ripple', 'shockwave', 'sparks', 'confetti', 'hitmarker'];
 
 export function ripple(style, c) {
+    if (style === 'hitmarker') {
+        // A shooter-game hit marker: four short diagonal strokes around the
+        // click with a gap in the middle, popping in and fading fast.
+        return centred(420, 44, (cr, t) => {
+            const pop = t < 0.12 ? lerp(1.45, 1, easeOut(t / 0.12)) : 1;
+            const a = 1 - seg(t, 0.3, 1);
+            const gap = 6 * pop, len = 10 * pop;
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+                const k = Math.SQRT1_2;
+                const x0 = dx * gap * k, y0 = dy * gap * k;
+                const x1 = dx * (gap + len) * k, y1 = dy * (gap + len) * k;
+                // Dark outline so it shows on light backgrounds too.
+                cr.setLineWidth(4.6);
+                cr.setSourceRGBA(0, 0, 0, 0.45 * a);
+                cr.moveTo(x0, y0);
+                cr.lineTo(x1, y1);
+                cr.stroke();
+                glowStroke(cr, [[x0, y0], [x1, y1]], c, a, 2.2);
+            }
+        });
+    }
     if (style === 'shockwave') {
         const streaks = Array.from({length: 10}, (_, i) => (i / 10) * TAU + rand(-0.15, 0.15));
         return centred(520, 80, (cr, t) => {
@@ -466,7 +488,7 @@ export function clipCut() {
 const at = (p, x, y, delay = 0) => ({...p, x: x - p.ox, y: y - p.oy, delay});
 
 export const PREVIEWS = {
-    ripples: () => RIPPLE_STYLES.map((s, i) => at(ripple(s, [0.35, 0.7, 1]), 300 + i * 420, 400)),
+    ripples: () => RIPPLE_STYLES.map((s, i) => at(ripple(s, [0.35, 0.7, 1]), 260 + i * 350, 400)),
     slam: (W, H) => [at(place(snapEdge(H, -150), [1, 0]), 0, H / 2), at(place(snapEdge(W, -500), [0, 1]), W / 2, 0, 0)],
     cross: (W, H) => [
         at(place(crossExit(520), [1, 0]), W / 2 - 1, H / 2),

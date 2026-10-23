@@ -16,11 +16,12 @@ import {
 // Defaults; the Lumora app changes these live via ~/.config/lumora/config.json
 const DEFAULTS = {
     trail: true,
-    trailStyle: 'comet',          // comet, rainbow, sparkles, stars
+    trailStyle: 'comet',          // see TRAIL_STYLES
     trailSize: 1,
     ripples: true,
-    rippleStyle: 'ripple',        // ripple, shockwave, sparks, confetti
+    rippleStyle: 'ripple',        // ripple, shockwave, sparks, confetti, hitmarker
     rippleColor: '80, 170, 255',
+    trailColor: '255, 60, 220',   // used by the neon trail
     rippleSize: 1,
     windowSlam: true,             // lock-on effect when a dragged window snaps to an edge
     windowCross: true,            // light gate when a dragged window changes monitor
@@ -33,8 +34,39 @@ const DEFAULTS = {
     combo: true,
     comboMin: 10,                 // keys before the counter shows
     comboCorner: 'bottom-right',
+    scrollCombo: true,            // a meter that fills while you keep scrolling
+    scrollSide: 'right',
 };
-const TRAIL_STYLES = ['comet', 'rainbow', 'sparkles', 'stars'];
+
+// ---- Cursor trail styles (colours are fixed here, never from config) ----
+// Ribbons: a fixed row of dots laid along the recent mouse path.
+const RIBBONS = {
+    comet: {size: 11, spacing: 6, life: 260},
+    rainbow: {size: 11, spacing: 6, life: 260},
+    neon: {size: 13, spacing: 5, life: 320},
+};
+// Particles: thrown off as the mouse moves (one per `every` px moved).
+//   shape: dot / ring / square / char; vx, vy: px/s ranges; gravity: px/s²
+//   (negative rises); grow: size change over the life; wobble: side sway.
+const PARTICLES = {
+    sparkles: {shape: 'dot', size: 5, colors: ['255, 220, 120', '255, 220, 120', '255, 255, 255'],
+        every: 9, life: [450, 800], vx: [-30, 30], vy: [-20, 30], gravity: 70, grow: -0.5, twinkle: true},
+    stars: {shape: 'char', chars: ['✦', '✦', '★'], colors: ['255, 224, 102', '255, 255, 255', '159, 220, 255', '255, 179, 230'],
+        size: 13, every: 9, life: [450, 800], vx: [-30, 30], vy: [-20, 30], gravity: 70, grow: -0.5,
+        twinkle: true, spin: 200},
+    fire: {shape: 'dot', size: 9, colors: ['255, 230, 120', '255, 170, 50', '255, 120, 30', '235, 65, 25'],
+        every: 4, life: [280, 520], vx: [-14, 14], vy: [-120, -60], gravity: -80, grow: 0.8, flicker: true, wobble: 6},
+    bubbles: {shape: 'ring', size: 11, colors: ['160, 220, 255', '190, 240, 255', '220, 245, 255'],
+        every: 14, life: [700, 1200], vx: [-10, 10], vy: [-45, -20], gravity: -15, grow: 0.3, wobble: 16},
+    snow: {shape: 'char', chars: ['❄', '❅', '•'], colors: ['255, 255, 255', '223, 243, 255', '207, 233, 255'],
+        size: 12, every: 11, life: [900, 1500], vx: [-15, 15], vy: [15, 40], gravity: 8, wobble: 14, spin: 90},
+    hearts: {shape: 'char', chars: ['♥'], colors: ['255, 92, 138', '255, 143, 177', '255, 61, 110'],
+        size: 13, every: 12, life: [600, 1000], vx: [-20, 20], vy: [-45, -15], gravity: -25, grow: 0.3, wobble: 8},
+    pixels: {shape: 'square', size: 6, colors: ['255, 70, 90', '255, 200, 60', '90, 230, 120', '70, 190, 255', '190, 110, 255'],
+        every: 7, life: [350, 650], vx: [0, 0], vy: [0, 0], gravity: 0, grid: 6, steps: true},
+};
+const TRAIL_STYLES = [...Object.keys(RIBBONS), ...Object.keys(PARTICLES)];
+const SIDES = ['right', 'left'];
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
 const PREVIEW_PORT = 47323;       // the Lumora app sends previews here
 const TICK_MS = 16;               // pointer polling (~60 fps), only while needed
@@ -59,7 +91,8 @@ const rand = (a, b) => a + Math.random() * (b - a);
 // Colours used in CSS: fixed lists, never config values.
 const TRAIL_GLOW = '80, 180, 255';
 const RAINBOW = ['255, 70, 90', '255, 150, 50', '255, 220, 60', '90, 230, 120', '70, 190, 255', '150, 110, 255'];
-const STAR_COLORS = ['#ffe066', '#ffffff', '#9fdcff', '#ffb3e6'];
+// Scroll meter colours from empty to full.
+const SCROLL_COLORS = [[80, 220, 120], [250, 220, 60], [255, 150, 40], [255, 60, 50]];
 const COMBO_TIERS = [ // [from, text colour, glow colour]
     [0, '#ffffff', '120, 200, 255'],
     [25, '#7dffb0', '60, 220, 120'],
@@ -106,6 +139,12 @@ export default class DesktopFxExtension extends Extension {
         this._combo = null;
         this._battery = null;
         this._previewTrailUntil = 0;
+        this._frameClients = new Set();   // what needs a callback on every screen frame
+        this._frameTl = null;
+        this._frameActor = null;
+        this._lastDevType = null;         // keyboard or mouse/touchpad: what was used last
+        this._inputs = [];                // key-or-scroll events waiting to be sorted
+        this._scroll = null;
         this._ifaceSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
 
         this._cfg = new LiveConfig('desktop', DEFAULTS, () => this._sync());
@@ -134,6 +173,9 @@ export default class DesktopFxExtension extends Extension {
         this._on = {cursor: false, windows: false, desktop: false};
         this._stopTicker();
         this._setIdleWatch(false);
+        this._endScroll();
+        this._frameClients.clear();
+        this._stopFrames();
         this._setGrabSignals(false);
         this._stopLow(true);
         this._setClipboardWatch(false);
@@ -173,15 +215,17 @@ export default class DesktopFxExtension extends Extension {
         for (const k in this._flagPaths)
             this._on[k] = GLib.file_test(this._flagPaths[k], GLib.FileTest.EXISTS);
         const on = this._on, cfg = this._cfg.values;
-        this._setIdleWatch((on.cursor && cfg.ripples) || (on.desktop && cfg.combo));
+        this._setIdleWatch((on.cursor && (cfg.ripples || cfg.scrollCombo)) || (on.desktop && cfg.combo));
         this._setGrabSignals(on.windows && (cfg.windowSlam || cfg.windowCross));
         this._setClipboardWatch(on.desktop && cfg.clipboard.length > 0);
         if (this._wantTicker())
             this._startTicker();
         if (!on.cursor || !cfg.trail)
             this._clearTrail();
-        if (!on.desktop || !cfg.combo)
+        if ((!on.desktop || !cfg.combo) && !this._combo?.preview)
             this._endCombo(true);
+        if ((!on.cursor || !cfg.scrollCombo) && !this._scroll?.preview)
+            this._endScroll();
         this._batteryCheck();
     }
 
@@ -261,9 +305,15 @@ export default class DesktopFxExtension extends Extension {
 
     // Validated "r, g, b" (it goes into CSS, so never trust it blindly).
     _rippleRgb() {
-        const m = /^(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})$/.exec(this._cfg.values.rippleColor);
+        return this._rgbSetting('rippleColor', [80, 170, 255]);
+    }
+
+    // A validated [r, g, b] from an "r, g, b" setting (it can end up in
+    // CSS, so never trust it blindly).
+    _rgbSetting(key, fallback) {
+        const m = /^(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})$/.exec(this._cfg.values[key]);
         if (!m || [m[1], m[2], m[3]].some(v => +v > 255))
-            return [80, 170, 255];
+            return fallback;
         return [+m[1], +m[2], +m[3]];
     }
 
@@ -367,26 +417,17 @@ export default class DesktopFxExtension extends Extension {
         if (!this._locked())
             this._checkButtons(x, y, mods);
 
-        // A preview draws a figure of eight instead of following the mouse.
-        let trailOn = this._on.cursor && cfg.trail && !this._locked();
-        let style = TRAIL_STYLES.includes(cfg.trailStyle) ? cfg.trailStyle : 'comet';
-        if (this._previewTrailUntil) {
-            if (now > this._previewTrailUntil) {
-                this._previewTrailUntil = 0;
-                this._clearTrail();
-            } else {
-                const mon = Main.layoutManager.primaryMonitor;
-                const k = (now - this._previewTrailStart) / 1000 * 2.6;
-                x = mon.x + mon.width / 2 + Math.sin(k) * mon.width * 0.22;
-                y = mon.y + mon.height / 2 + Math.sin(k * 2) * mon.height * 0.16;
-                trailOn = true;
-                style = this._previewTrailStyle ?? style;
-            }
-        }
-        if (trailOn)
-            this._trailStep(x, y, now, dt, style);
-        else
+        // The trail itself is drawn in step with the screen (_trailFrame);
+        // here we only notice that the mouse moved and wake that up.
+        const trailOn = (this._on.cursor && cfg.trail && !this._locked()) || this._previewTrailUntil;
+        if (!trailOn) {
             this._clearTrail();         // e.g. the screen just locked
+        } else if (x !== this._tickX || y !== this._tickY || this._previewTrailUntil) {
+            this._wantFrames('trail', true);
+        }
+        this._tickX = x;
+        this._tickY = y;
+        void dt;
 
         if (this._grab)
             this._grabStep();
@@ -422,6 +463,7 @@ export default class DesktopFxExtension extends Extension {
     // changed, the event came from the keyboard. Nothing about WHICH key is
     // ever seen; we only count them.
     _setIdleWatch(on) {
+        this._setDeviceWatch(on);
         if (on === !!this._idleWatch)
             return;
         const monitor = global.backend.get_core_idle_monitor();
@@ -448,8 +490,44 @@ export default class DesktopFxExtension extends Extension {
         const same = key === this._lastInput;
         this._lastInput = key;
         this._checkButtons(x, y, mods);
-        if (same && this._on.desktop && this._cfg.values.combo)
-            this._keyEvent();
+        if (!same)
+            return;
+        // Nothing moved and no button changed: a key or a scroll. GNOME
+        // tells us which kind of device was used last, just after the
+        // event, so sort these a moment later.
+        this._inputs.push(GLib.get_monotonic_time() / 1000);
+        if (!this._sortId) {
+            this._sortId = this._later(25, () => {
+                this._sortId = 0;
+                const times = this._inputs;
+                this._inputs = [];
+                const T = Clutter.InputDeviceType;
+                const scroll = this._lastDevType === T.POINTER_DEVICE || this._lastDevType === T.TOUCHPAD_DEVICE;
+                const cfg = this._cfg.values;
+                for (const t of times) {
+                    if (scroll) {
+                        if (this._on.cursor && cfg.scrollCombo)
+                            this._scrollEvent(t);
+                    } else if (this._on.desktop && cfg.combo) {
+                        this._keyEvent(t);
+                    }
+                }
+            });
+        }
+    }
+
+    _setDeviceWatch(on) {
+        if (on === !!this._deviceWatch)
+            return;
+        this._deviceWatch = on;
+        if (on) {
+            global.backend.connectObject('last-device-changed', (_b, dev) => {
+                this._lastDevType = dev?.get_device_type?.() ?? dev?.device_type ?? null;
+            }, this);
+        } else {
+            global.backend.disconnectObject(this);
+            this._lastDevType = null;
+        }
     }
 
     // ---------- Cursor trail ----------
@@ -461,41 +539,102 @@ export default class DesktopFxExtension extends Extension {
         this._trail = null;
     }
 
+    // One fixed pool of actors per style; nothing is created while drawing.
     _ensureTrail(style) {
         const sc = this._cursorScale() * Math.max(0.3, Math.min(4, this._cfg.values.trailSize));
-        if (this._trail && this._trail.style === style && this._trail.sc === sc)
+        const color = style === 'neon' ? this._rgbSetting('trailColor', [255, 60, 220]).join(', ') : '';
+        if (this._trail && this._trail.style === style && this._trail.sc === sc && this._trail.color === color)
             return this._trail;
         this._clearTrail();
         const layer = this._add(this._fullStage());
+        const ribbon = RIBBONS[style] ?? null;
+        const part = ribbon ? null : PARTICLES[style] ?? PARTICLES.sparkles;
+        const n = ribbon ? 44 : 80;
         const pool = [];
-        const ribbon = style === 'comet' || style === 'rainbow';
-        const n = ribbon ? 40 : 60;
         for (let i = 0; i < n; i++) {
-            let a;
-            if (style === 'stars') {
-                const col = STAR_COLORS[i % STAR_COLORS.length];
-                a = new St.Label({
-                    text: i % 3 ? '✦' : '★', reactive: false, opacity: 0,
-                    style: `color: ${col}; font-size: ${Math.round(13 * sc)}px;` +
-                           `text-shadow: 0 0 ${Math.round(6 * sc)}px ${col};`,
-                });
-            } else {
-                const d = Math.max(3, Math.round((ribbon ? 11 : 5) * sc));
-                const glow = style === 'rainbow' ? RAINBOW[i % RAINBOW.length]
-                    : style === 'sparkles' ? (i % 3 ? '255, 220, 120' : '255, 255, 255') : TRAIL_GLOW;
-                a = new St.Widget({
-                    reactive: false, opacity: 0, width: d, height: d,
-                    style: `background-color: ${style === 'rainbow' ? `rgba(${glow}, 0.95)` : 'rgba(255, 255, 255, 0.95)'};` +
-                           `border-radius: ${d / 2}px;` +
-                           `box-shadow: 0 0 ${Math.round(8 * sc)}px ${Math.round(3 * sc)}px rgba(${glow}, 0.8);`,
-                });
-            }
+            const a = ribbon ? this._ribbonDot(style, ribbon, i, n, sc, color) : this._particle(part, i, sc);
             a.set_pivot_point(0.5, 0.5);
             layer.add_child(a);
-            pool.push({actor: a, live: false});
+            pool.push({actor: a, live: false, w: a.width, h: a.height});
         }
-        this._trail = {layer, pool, style, sc, ribbon, pts: [], parts: [], lastX: null, lastY: null};
+        this._trail = {layer, pool, style, sc, color, ribbon, part, pts: [], lastX: null, lastY: null, carry: 0};
         return this._trail;
+    }
+
+    // `color` ("r, g, b", already validated) is the neon trail's colour.
+    _ribbonDot(style, r, i, n, sc, color) {
+        const d = Math.max(3, Math.round(r.size * sc));
+        let fill = 'rgba(255, 255, 255, 0.95)', glow = TRAIL_GLOW;
+        if (style === 'rainbow') {
+            glow = RAINBOW[i % RAINBOW.length];
+            fill = `rgba(${glow}, 0.95)`;
+        } else if (style === 'neon') {
+            // The chosen colour glowing all along, with a near-white core at
+            // the head that takes on more of the colour towards the tail.
+            const c = color.split(',').map(Number);
+            const white = 0.7 - 0.5 * (i / (n - 1));
+            glow = color;
+            fill = `rgba(${c.map(v => Math.round(v + (255 - v) * white)).join(', ')}, 0.95)`;
+        }
+        return new St.Widget({
+            reactive: false, opacity: 0, width: d, height: d,
+            style: `background-color: ${fill}; border-radius: ${d / 2}px;` +
+                   `box-shadow: 0 0 ${Math.round((style === 'neon' ? 12 : 8) * sc)}px ` +
+                   `${Math.round((style === 'neon' ? 4 : 3) * sc)}px rgba(${glow}, 0.85);`,
+        });
+    }
+
+    _particle(p, i, sc) {
+        const col = p.colors[i % p.colors.length];
+        if (p.shape === 'char') {
+            return new St.Label({
+                text: p.chars[i % p.chars.length], reactive: false, opacity: 0,
+                style: `color: rgb(${col}); font-size: ${Math.round(p.size * sc)}px;` +
+                       `text-shadow: 0 0 ${Math.round(6 * sc)}px rgba(${col}, 0.9);`,
+            });
+        }
+        const d = Math.max(3, Math.round(p.size * sc));
+        let style;
+        if (p.shape === 'ring') {
+            style = `border: ${Math.max(1, Math.round(1.6 * sc))}px solid rgba(${col}, 0.9); border-radius: ${d / 2}px;` +
+                    `background-color: rgba(${col}, 0.12);`;
+        } else if (p.shape === 'square') {
+            style = `background-color: rgb(${col});`;
+        } else {
+            style = `background-color: rgba(${col}, 0.95); border-radius: ${d / 2}px;` +
+                    `box-shadow: 0 0 ${Math.round(8 * sc)}px ${Math.round(3 * sc)}px rgba(${col}, 0.75);`;
+        }
+        return new St.Widget({reactive: false, opacity: 0, width: d, height: d, style});
+    }
+
+    // Runs on every screen frame while the trail has something to show.
+    _trailFrame(now, dt) {
+        const cfg = this._cfg.values;
+        let [x, y] = global.get_pointer();
+        let on = this._on.cursor && cfg.trail && !this._locked();
+        let style = TRAIL_STYLES.includes(cfg.trailStyle) ? cfg.trailStyle : 'comet';
+        // A preview draws a figure of eight instead of following the mouse.
+        if (this._previewTrailUntil) {
+            if (now > this._previewTrailUntil) {
+                this._previewTrailUntil = 0;
+                this._clearTrail();
+            } else {
+                const mon = Main.layoutManager.primaryMonitor;
+                const k = (now - this._previewTrailStart) / 1000 * 2.6;
+                x = mon.x + mon.width / 2 + Math.sin(k) * mon.width * 0.22;
+                y = mon.y + mon.height / 2 + Math.sin(k * 2) * mon.height * 0.16;
+                on = true;
+                style = this._previewTrailStyle ?? style;
+            }
+        }
+        if (!on) {
+            this._clearTrail();
+            this._wantFrames('trail', false);
+            return;
+        }
+        this._trailStep(x, y, now, dt, style);
+        if (this._trail.quiet && !this._previewTrailUntil)
+            this._wantFrames('trail', false);    // the ticker wakes us when the mouse moves
     }
 
     _trailStep(x, y, now, dt, style) {
@@ -503,67 +642,95 @@ export default class DesktopFxExtension extends Extension {
         const tr = this._ensureTrail(style);
         const moved = tr.lastX === null ? 0 : Math.hypot(x - tr.lastX, y - tr.lastY);
         // Mouse resting and nothing left on screen: no work this frame.
-        if (moved <= 0.5 && tr.quiet)
+        if (moved <= 0.3 && tr.quiet) {
+            tr.lastX = x;
+            tr.lastY = y;
             return;
+        }
         if (tr.ribbon) {
             // Keep recent positions; dots are laid out along that path.
-            if (moved > 0.5 || !tr.pts.length)
+            if (moved > 0.3 || !tr.pts.length)
                 tr.pts.push({x, y, t: now});
-            const life = 260 * Math.max(0.5, Math.min(3, cfg.trailSize));
+            const life = tr.ribbon.life * Math.max(0.5, Math.min(3, cfg.trailSize));
             while (tr.pts.length && now - tr.pts[0].t > life)
                 tr.pts.shift();
             this._layoutRibbon(tr, now, life);
             tr.quiet = tr.pts.length < 2;
-            this._updateUnredirect();
         } else {
-            // Particles thrown off as the cursor moves.
-            let spawn = Math.min(4, Math.floor(moved / 9));
-            for (const p of tr.pool) {
-                if (spawn <= 0)
-                    break;
-                if (p.live)
-                    continue;
-                spawn--;
-                const k = Math.random();
-                Object.assign(p, {
-                    live: true, born: now, life: rand(450, 800),
-                    x: tr.lastX + (x - tr.lastX) * k + rand(-4, 4) * tr.sc,
-                    y: tr.lastY + (y - tr.lastY) * k + rand(-4, 4) * tr.sc,
-                    vx: rand(-30, 30) * tr.sc, vy: rand(-20, 30) * tr.sc,
-                    spin: rand(-200, 200), size: rand(0.6, 1.2),
-                });
-            }
-            for (const p of tr.pool) {
-                if (!p.live)
-                    continue;
-                const age = (now - p.born) / p.life;
-                if (age >= 1) {
-                    p.live = false;
-                    p.actor.opacity = 0;
-                    continue;
-                }
-                p.vy += 70 * tr.sc * dt;
-                p.x += p.vx * dt;
-                p.y += p.vy * dt;
-                const a = p.actor;
-                a.set_position(Math.round(p.x - a.width / 2), Math.round(p.y - a.height / 2));
-                const twinkle = 0.65 + 0.35 * Math.sin(age * 25 + p.spin);
-                a.opacity = Math.round(255 * (1 - age) * twinkle);
-                a.scale_x = a.scale_y = p.size * (1 - age * 0.5);
-                if (style === 'stars')
-                    a.rotation_angle_z = p.spin * age;
-            }
-            tr.quiet = !tr.pool.some(p => p.live);
-            this._updateUnredirect();
+            this._particlesStep(tr, x, y, moved, now, dt);
         }
+        this._updateUnredirect();
         tr.lastX = x;
         tr.lastY = y;
     }
 
-    // Spreads the comet's dots evenly along the recent path, head first.
+    _particlesStep(tr, x, y, moved, now, dt) {
+        const p = tr.part, sc = tr.sc;
+        // Spawn evenly along the path moved this frame.
+        tr.carry += moved;
+        const step = p.every * sc;
+        let spawn = Math.min(8, Math.floor(tr.carry / step));
+        tr.carry -= spawn * step;
+        if (tr.lastX === null)
+            spawn = 0;
+        let made = 0;
+        for (const q of tr.pool) {
+            if (made >= spawn)
+                break;
+            if (q.live)
+                continue;
+            made++;
+            const k = spawn > 1 ? made / spawn : Math.random();
+            Object.assign(q, {
+                live: true, born: now, life: rand(...p.life),
+                x: tr.lastX + (x - tr.lastX) * k + rand(-3, 3) * sc,
+                y: tr.lastY + (y - tr.lastY) * k + rand(-3, 3) * sc,
+                vx: rand(...p.vx) * sc, vy: rand(...p.vy) * sc,
+                phase: rand(0, Math.PI * 2), spin: rand(-1, 1) * (p.spin ?? 0), size: rand(0.7, 1.15),
+            });
+        }
+        let live = false;
+        for (const q of tr.pool) {
+            if (!q.live)
+                continue;
+            const age = (now - q.born) / q.life;
+            if (age >= 1) {
+                q.live = false;
+                q.actor.opacity = 0;
+                continue;
+            }
+            live = true;
+            q.vy += p.gravity * sc * dt;
+            q.x += q.vx * dt;
+            q.y += q.vy * dt;
+            let px = q.x + (p.wobble ? Math.sin(q.phase + age * 9) * p.wobble * sc * age : 0);
+            let py = q.y;
+            if (p.grid) {                   // retro pixels: snap to a grid
+                const g = p.grid * sc;
+                px = Math.round(px / g) * g;
+                py = Math.round(py / g) * g;
+            }
+            const a = q.actor;
+            a.set_position(px - q.w / 2, py - q.h / 2);
+            let alpha = 1 - age;
+            if (p.twinkle)
+                alpha *= 0.65 + 0.35 * Math.sin(age * 25 + q.phase);
+            if (p.flicker)
+                alpha *= 0.75 + 0.25 * Math.sin(now / 30 + q.phase);
+            if (p.steps)
+                alpha = Math.ceil(alpha * 4) / 4;
+            a.opacity = Math.round(255 * Math.max(0, alpha));
+            a.scale_x = a.scale_y = Math.max(0.05, q.size * (1 + (p.grow ?? 0) * age));
+            if (p.spin)
+                a.rotation_angle_z = q.spin * age;
+        }
+        tr.quiet = !live;
+    }
+
+    // Spreads the ribbon's dots evenly along the recent path, head first.
     _layoutRibbon(tr, now, life) {
         const pts = tr.pts;
-        const spacing = 6 * tr.sc;
+        const spacing = tr.ribbon.spacing * tr.sc;
         let i = pts.length - 1, used = 0;
         let seg = 0, segStart = 0; // distance along the path from the head
         for (const p of tr.pool) {
@@ -583,14 +750,173 @@ export default class DesktopFxExtension extends Extension {
             const k = seg > 0 ? (want - segStart) / seg : 0;
             const px = pts[i].x + (pts[i - 1].x - pts[i].x) * k;
             const py = pts[i].y + (pts[i - 1].y - pts[i].y) * k;
-            const age = Math.min(1, (now - pts[i].t) / life);
+            // Fade smoothly with the age of this exact spot on the path.
+            const t = pts[i].t + (pts[i - 1].t - pts[i].t) * k;
+            const age = Math.min(1, (now - t) / life);
             const along = used / tr.pool.length;
             const a = p.actor;
-            a.set_position(Math.round(px - a.width / 2), Math.round(py - a.height / 2));
+            a.set_position(px - p.w / 2, py - p.h / 2);     // sub-pixel: no rounding
             a.scale_x = a.scale_y = Math.max(0.15, 1 - along);
             a.opacity = Math.round(230 * (1 - along) * (1 - age));
             used++;
         }
+    }
+
+    // ---------- Frame driver ----------
+
+    // A looping timeline gives a callback in step with every screen redraw
+    // (smooth, unlike a timer). It only runs while a client needs it, since
+    // it keeps the screen redrawing.
+    _wantFrames(client, on) {
+        if (on)
+            this._frameClients.add(client);
+        else
+            this._frameClients.delete(client);
+        if (this._frameClients.size)
+            this._startFrames();
+        else
+            this._stopFrames();
+    }
+
+    _startFrames() {
+        if (this._frameTl)
+            return;
+        if (!this._frameActor) {
+            // Invisible; only here to give the timeline the screen's clock.
+            this._frameActor = new St.Widget({
+                reactive: false, opacity: 0, x: 0, y: 0,
+                width: global.stage.width, height: global.stage.height,
+            });
+            Main.uiGroup.add_child(this._frameActor);
+        }
+        this._lastFrame = GLib.get_monotonic_time() / 1000;
+        const tl = new Clutter.Timeline({actor: this._frameActor, duration: 1000, repeat_count: -1});
+        tl.connect('new-frame', () => {
+            const now = GLib.get_monotonic_time() / 1000;
+            const dt = Math.min(0.05, Math.max(0, now - this._lastFrame) / 1000);
+            this._lastFrame = now;
+            try {
+                if (this._frameClients.has('trail'))
+                    this._trailFrame(now, dt);
+                if (this._frameClients.has('scroll'))
+                    this._scrollFrame(now, dt);
+            } catch (e) {
+                console.error(`Desktop FX frame error: ${e}`);
+                this._frameClients.clear();
+                this._clearTrail();
+                this._endScroll();
+                this._stopFrames();
+            }
+        });
+        this._frameTl = tl;
+        tl.start();
+    }
+
+    _stopFrames() {
+        this._frameTl?.stop();
+        this._frameTl = null;
+        this._frameActor?.destroy();     // nothing of ours stays on the stage
+        this._frameActor = null;
+    }
+
+    // ---------- Scroll combo ----------
+
+    // Scrolling keeps filling a meter at the side of the screen: green,
+    // yellow, orange, red. Full and still scrolling: it glows red and shakes.
+    // A pause lets it drain away.
+    _scrollEvent(now = GLib.get_monotonic_time() / 1000, preview = false) {
+        if (!this._scroll) {
+            const [px, py] = global.get_pointer();
+            this._scroll = {level: 0, alpha: 0, lastEvent: now, events: 0, ui: null, preview,
+                mon: preview ? Main.layoutManager.primaryMonitor : this._monitorAt(px, py)};
+        }
+        const s = this._scroll;
+        s.lastEvent = now;
+        s.events++;
+        this._wantFrames('scroll', true);
+    }
+
+    _scrollUi(s) {
+        if (s.ui)
+            return s.ui;
+        const mon = s.mon, sc = this._monScale(mon);
+        const H = Math.round(mon.height * 0.36), W = Math.max(8, Math.round(12 * sc));
+        const m = Math.round(22 * sc);
+        const side = SIDES.includes(this._cfg.values.scrollSide) ? this._cfg.values.scrollSide : 'right';
+        const root = this._add(new St.Widget({
+            reactive: false, opacity: 0, width: W, height: H,
+            x: side === 'left' ? mon.x + m : mon.x + mon.width - m - W,
+            y: mon.y + Math.round((mon.height - H) / 2),
+        }));
+        root.set_pivot_point(0.5, 0.5);
+        const fill = new St.Widget({reactive: false, x: 0, width: W, height: 0});
+        root.add_child(fill);
+        s.ui = {root, fill, W, H, sc, styleKey: '', trackKey: ''};
+        return s.ui;
+    }
+
+    _scrollColor(level) {
+        const k = Math.max(0, Math.min(1, level)) * (SCROLL_COLORS.length - 1);
+        const i = Math.min(SCROLL_COLORS.length - 2, Math.floor(k)), f = k - i;
+        return SCROLL_COLORS[i].map((v, j) => Math.round(v + (SCROLL_COLORS[i + 1][j] - v) * f));
+    }
+
+    _scrollFrame(now, dt) {
+        const s = this._scroll;
+        if (!s) {
+            this._wantFrames('scroll', false);
+            return;
+        }
+        const active = now - s.lastEvent < 260 && s.events >= 3;
+        if (active)
+            s.level = Math.min(1, s.level + dt / 3.5);           // ~3.5s of scrolling to fill
+        else if (now - s.lastEvent > 500)
+            s.level = Math.max(0, s.level - dt * 0.7);
+        const show = s.level > 0.02;
+        s.alpha = Math.max(0, Math.min(1, s.alpha + (show ? dt * 6 : -dt * 4)));
+        if (!show && s.alpha <= 0 && now - s.lastEvent > 500) {
+            this._endScroll();
+            return;
+        }
+        if (s.alpha <= 0)
+            return;
+        const ui = this._scrollUi(s);
+        const over = s.level >= 1 && active;
+        ui.root.opacity = Math.round(255 * s.alpha);
+        // Fill: a gradient from the current colour at the top down to green.
+        const h = Math.round(ui.H * s.level);
+        ui.fill.set_position(0, ui.H - h);
+        ui.fill.set_size(ui.W, h);
+        const c = this._scrollColor(Math.round(s.level * 50) / 50).join(', ');
+        if (c !== ui.styleKey) {
+            ui.styleKey = c;
+            ui.fill.style = `border-radius: ${ui.W / 2}px; background-gradient-direction: vertical;` +
+                `background-gradient-start: rgba(${c}, 0.95); background-gradient-end: rgba(80, 220, 120, 0.95);` +
+                `box-shadow: 0 0 ${Math.round(10 * ui.sc)}px ${Math.round(2 * ui.sc)}px rgba(${c}, 0.6);`;
+        }
+        // Track: dark, with a light red glow that pulses while overdriven.
+        const pulse = over ? 0.15 + 0.12 * Math.sin(now / 90) : 0;
+        const tkey = over ? `o${Math.round(pulse * 40)}` : 'n';
+        if (tkey !== ui.trackKey) {
+            ui.trackKey = tkey;
+            ui.root.style = `background-color: rgba(20, 22, 28, 0.55); border-radius: ${ui.W / 2}px;` +
+                'border: 1px solid rgba(255, 255, 255, 0.15);' +
+                (over ? `box-shadow: 0 0 ${Math.round(26 * ui.sc)}px ${Math.round(8 * ui.sc)}px ` +
+                        `rgba(255, 60, 50, ${pulse.toFixed(2)});` : '');
+        }
+        const shake = over ? 3 * ui.sc : 0;
+        ui.root.translation_x = shake ? rand(-shake, shake) : 0;
+        ui.root.translation_y = shake ? rand(-shake, shake) : 0;
+    }
+
+    _endScroll() {
+        const s = this._scroll;
+        if (!s)
+            return;
+        this._scroll = null;
+        if (s.ui)
+            this._remove(s.ui.root);
+        this._wantFrames('scroll', false);
     }
 
     // ---------- Dragging windows: slams and monitor crossings ----------
@@ -1087,8 +1413,7 @@ export default class DesktopFxExtension extends Extension {
 
     // ---------- Typing combo ----------
 
-    _keyEvent() {
-        const now = GLib.get_monotonic_time() / 1000;
+    _keyEvent(now = GLib.get_monotonic_time() / 1000) {
         if (this._combo && now - this._combo.last > COMBO_GAP_MS)
             this._endCombo();          // paused too long: start a new combo
         const c = this._combo ?? (this._combo = {halfKeys: 0, last: now, fast: 0, shown: 0, ui: null, endId: 0});
@@ -1213,7 +1538,12 @@ export default class DesktopFxExtension extends Extension {
             this._previewTrailStart = now;
             this._previewTrailUntil = now + 2600;
             this._clearTrail();
-            this._startTicker();
+            this._wantFrames('trail', true);
+        } else if (cmd === 'scroll') {
+            // Five seconds of scrolling: fills up, then overdrives, then drains.
+            this._endScroll();
+            for (let i = 0; i < 100; i++)
+                this._later(1 + i * 50, () => this._scrollEvent(undefined, true));
         } else if (cmd === 'ripple') {
             const style = RIPPLE_STYLES.includes(arg) ? arg : null;
             [[0, 0], [-90, 40], [80, -30]].forEach(([dx, dy], i) =>
@@ -1239,7 +1569,7 @@ export default class DesktopFxExtension extends Extension {
             this._clipAnim(cmd, [cx, cy]);
         } else if (cmd === 'combo') {
             this._endCombo(true);
-            this._combo = {halfKeys: 0, last: 0, fast: 0, shown: 0, ui: null, endId: 0};
+            this._combo = {halfKeys: 0, last: 0, fast: 0, shown: 0, ui: null, endId: 0, preview: true};
             for (let i = 1; i <= 60; i++) {
                 this._later(i * (90 - i * 0.6), () => {
                     if (this._combo)
