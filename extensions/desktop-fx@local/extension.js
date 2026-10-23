@@ -490,8 +490,14 @@ export default class DesktopFxExtension extends Extension {
         const same = key === this._lastInput;
         this._lastInput = key;
         this._checkButtons(x, y, mods);
-        if (!same)
+        if (!same) {
+            // The pointer moved, so the mouse/touchpad is the last device.
+            // GNOME only says so when the device *changes*, so after Desktop
+            // FX is restarted (GNOME stops it while the screen is locked) we
+            // would otherwise not know until the keyboard was used again.
+            this._lastDevType ??= Clutter.InputDeviceType.POINTER_DEVICE;
             return;
+        }
         // Nothing moved and no button changed: a key or a scroll. GNOME
         // tells us which kind of device was used last, just after the
         // event, so sort these a moment later.

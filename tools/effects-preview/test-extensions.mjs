@@ -191,6 +191,9 @@ if (which === 'desktop') {
     config({desktop: {trail: false, ripples: false, comboMin: 10}});
     advance(300);
     inputEvent();                              // the mouse's last motion event
+    // Like GNOME: switching from the mouse to the keyboard is announced.
+    const typing = () => mock.useDevice(mock.Clutter.InputDeviceType.KEYBOARD_DEVICE);
+    typing();
     for (let k = 0; k < 30; k++) {             // 30 keys: press + release each
         inputEvent(); advance(40);
         inputEvent(); advance(60);
@@ -546,6 +549,19 @@ if (which === 'desktop') {
     check(left && left.x < 100, `touchpad scroll: meter on the left (x=${left?.x})`);
     advance(4000);
     check(!meter(), 'left meter drains away');
+    // Locking stops Desktop FX and unlocking starts it again. GNOME doesn't
+    // repeat which device was used last, so after moving the mouse a scroll
+    // must still be recognised as a scroll.
+    ext.disable();
+    ext.enable();
+    advance(1500);
+    config({desktop: {trail: false, ripples: false, scrollSide: 'right'}});
+    advance(300);
+    pointer.x = 700; pointer.y = 400; inputEvent(); advance(30);
+    pointer.x = 720; inputEvent(); advance(30);          // mouse moves (no device signal)
+    scrollFor(1000);
+    check(!!meter(), 'after lock/unlock (extension restarted): scrolling still fills the meter');
+    advance(4500);
     config({desktop: {trail: false, ripples: false, scrollCombo: false}});
     advance(300);
     mock.useDevice(mock.Clutter.InputDeviceType.POINTER_DEVICE);

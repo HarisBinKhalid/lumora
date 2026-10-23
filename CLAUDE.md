@@ -176,7 +176,11 @@ Edit the source here and run `./install.sh`.
   Key vs scroll: both look the same to the idle watch, so Desktop FX also
   listens to `global.backend` `last-device-changed` (as GNOME's on-screen
   keyboard does) and sorts the events ~25ms later: last device a pointer or
-  touchpad = scroll (scroll combo), else a key (typing combo).
+  touchpad = scroll (scroll combo), else a key (typing combo). GNOME only
+  emits that signal when the device CHANGES, and Desktop FX is restarted on
+  every unlock (GNOME disables it on the lock screen), so pointer motion
+  also sets the last device to "pointer" when it's still unknown;
+  otherwise scrolling after an unlock was counted as typing.
 - **Clipboard:** keys can't be seen (above), so Desktop FX follows
   `global.display.get_selection()` `owner-changed` for the CLIPBOARD:
   any new owner = "copied" (copy and cut of text look the same); files with
